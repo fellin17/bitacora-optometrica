@@ -1,0 +1,924 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Admin — Bitácora Optométrica</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+<!-- Firebase -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<style>
+/* ═══ RESET & BASE ═══ */
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#060912;--bg2:#0d1117;--bg3:#111827;--bg4:#1a2235;
+  --border:rgba(255,255,255,.07);--border2:rgba(255,255,255,.12);
+  --primary:#6366f1;--primary2:#818cf8;--primary-glow:rgba(99,102,241,.25);
+  --green:#10b981;--green-dim:rgba(16,185,129,.15);
+  --red:#ef4444;--red-dim:rgba(239,68,68,.15);
+  --yellow:#f59e0b;--yellow-dim:rgba(245,158,11,.15);
+  --blue:#3b82f6;--blue-dim:rgba(59,130,246,.15);
+  --cyan:#06b6d4;
+  --text:#e2e8f0;--text2:#94a3b8;--text3:#475569;
+  --font:'Space Grotesk',sans-serif;
+  --font-display:'Syne',sans-serif;
+}
+html,body{min-height:100vh;background:var(--bg);color:var(--text);font-family:var(--font);overflow-x:hidden}
+
+/* ═══ FONDO ANIMADO ═══ */
+.bg-grid{position:fixed;inset:0;z-index:0;pointer-events:none;
+  background-image:linear-gradient(rgba(99,102,241,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(99,102,241,.04) 1px,transparent 1px);
+  background-size:40px 40px}
+.bg-orbs{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}
+.orb{position:absolute;border-radius:50%;filter:blur(80px);animation:orbFloat 20s infinite ease-in-out}
+.orb1{width:400px;height:400px;background:radial-gradient(circle,rgba(99,102,241,.18),transparent 70%);top:-100px;left:-100px;animation-delay:0s}
+.orb2{width:350px;height:350px;background:radial-gradient(circle,rgba(6,182,212,.12),transparent 70%);top:30%;right:-80px;animation-delay:-7s}
+.orb3{width:300px;height:300px;background:radial-gradient(circle,rgba(16,185,129,.1),transparent 70%);bottom:-50px;left:30%;animation-delay:-13s}
+@keyframes orbFloat{0%,100%{transform:translate(0,0) scale(1)}33%{transform:translate(30px,-30px) scale(1.05)}66%{transform:translate(-20px,20px) scale(.95)}}
+
+/* ═══ PANTALLAS ═══ */
+.screen{position:relative;z-index:1;min-height:100vh}
+#s-login{display:flex;align-items:center;justify-content:center;padding:20px}
+#s-panel{display:none}
+
+/* ═══ LOGIN ═══ */
+.login-card{
+  background:rgba(13,17,23,.85);
+  backdrop-filter:blur(32px);
+  border:1px solid var(--border2);
+  border-radius:24px;
+  padding:48px 40px;
+  width:100%;max-width:420px;
+  box-shadow:0 0 60px rgba(99,102,241,.15),0 32px 64px rgba(0,0,0,.5);
+  animation:cardIn .7s cubic-bezier(.22,1,.36,1) both;
+}
+@keyframes cardIn{from{opacity:0;transform:translateY(32px) scale(.97)}to{opacity:1;transform:none}}
+.login-logo{text-align:center;margin-bottom:32px}
+.login-logo .ico{
+  width:72px;height:72px;
+  background:linear-gradient(135deg,var(--primary),var(--cyan));
+  border-radius:20px;
+  display:inline-flex;align-items:center;justify-content:center;
+  font-size:34px;
+  box-shadow:0 0 30px var(--primary-glow);
+  margin-bottom:16px;
+  animation:pulse 3s ease-in-out infinite;
+}
+@keyframes pulse{0%,100%{box-shadow:0 0 30px var(--primary-glow)}50%{box-shadow:0 0 50px rgba(99,102,241,.4)}}
+.login-logo h1{font-family:var(--font-display);font-size:1.6rem;color:white;margin-bottom:4px}
+.login-logo p{font-size:.82rem;color:var(--text2);letter-spacing:.5px}
+.lf{margin-bottom:16px}
+.lf label{display:block;font-size:.72rem;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px}
+.lf input{
+  width:100%;background:rgba(255,255,255,.05);
+  border:1.5px solid var(--border2);
+  border-radius:12px;padding:13px 16px;
+  font-family:var(--font);font-size:.95rem;color:white;outline:none;
+  transition:all .2s;
+}
+.lf input::placeholder{color:var(--text3)}
+.lf input:focus{border-color:var(--primary);background:rgba(99,102,241,.08);box-shadow:0 0 0 4px rgba(99,102,241,.12)}
+.btn-login{
+  width:100%;padding:14px;border:none;border-radius:12px;cursor:pointer;
+  font-family:var(--font);font-size:.95rem;font-weight:700;
+  background:linear-gradient(135deg,var(--primary),#7c3aed);
+  color:white;margin-top:8px;
+  box-shadow:0 4px 20px rgba(99,102,241,.4);
+  transition:all .2s;letter-spacing:.3px;
+}
+.btn-login:hover{transform:translateY(-2px);box-shadow:0 8px 30px rgba(99,102,241,.5)}
+.btn-login:active{transform:none}
+.err-login{display:none;margin-top:12px;padding:11px 14px;background:var(--red-dim);border:1px solid rgba(239,68,68,.3);border-radius:10px;font-size:.83rem;color:#fca5a5;text-align:center}
+
+/* ═══ HEADER ═══ */
+.hdr{
+  background:rgba(6,9,18,.9);
+  backdrop-filter:blur(20px);
+  border-bottom:1px solid var(--border);
+  padding:14px 28px;
+  display:flex;align-items:center;gap:14px;
+  position:sticky;top:0;z-index:100;
+}
+.hdr-logo{display:flex;align-items:center;gap:10px}
+.hdr-ico{
+  width:38px;height:38px;
+  background:linear-gradient(135deg,var(--primary),var(--cyan));
+  border-radius:10px;display:flex;align-items:center;justify-content:center;
+  font-size:18px;flex-shrink:0;
+  box-shadow:0 0 16px var(--primary-glow);
+}
+.hdr-title{font-family:var(--font-display);font-size:1rem;color:white}
+.hdr-sub{font-size:.68rem;color:var(--text3);text-transform:uppercase;letter-spacing:1px}
+.hdr-ticker{
+  flex:1;overflow:hidden;margin:0 16px;
+  background:rgba(255,255,255,.04);border:1px solid var(--border);
+  border-radius:8px;padding:6px 14px;
+  font-size:.75rem;color:var(--text2);
+  position:relative;
+}
+.hdr-ticker-inner{
+  white-space:nowrap;display:inline-block;
+  animation:ticker 30s linear infinite;
+}
+@keyframes ticker{from{transform:translateX(100%)}to{transform:translateX(-100%)}}
+.hdr-acts{display:flex;gap:8px;align-items:center;margin-left:auto}
+.btn-sm{padding:7px 14px;border-radius:9px;border:none;cursor:pointer;font-family:var(--font);font-size:.78rem;font-weight:600;transition:all .2s}
+.btn-primary{background:linear-gradient(135deg,var(--primary),#7c3aed);color:white;box-shadow:0 2px 10px rgba(99,102,241,.3)}
+.btn-primary:hover{opacity:.9;transform:translateY(-1px)}
+.btn-danger{background:var(--red-dim);color:#fca5a5;border:1px solid rgba(239,68,68,.3)}
+.btn-danger:hover{background:rgba(239,68,68,.25)}
+.btn-success{background:var(--green-dim);color:#6ee7b7;border:1px solid rgba(16,185,129,.3)}
+.btn-success:hover{background:rgba(16,185,129,.25)}
+.btn-warn{background:var(--yellow-dim);color:#fde68a;border:1px solid rgba(245,158,11,.3)}
+.btn-warn:hover{background:rgba(245,158,11,.25)}
+.btn-ghost{background:rgba(255,255,255,.06);color:var(--text2);border:1px solid var(--border)}
+.btn-ghost:hover{background:rgba(255,255,255,.1);color:white}
+.btn-salir{background:transparent;border:1px solid var(--border2);color:var(--text2);cursor:pointer;padding:7px 14px;border-radius:9px;font-family:var(--font);font-size:.78rem;font-weight:600;transition:all .2s}
+.btn-salir:hover{border-color:var(--red);color:var(--red)}
+
+/* ═══ MAIN ═══ */
+.main{max-width:1200px;margin:0 auto;padding:28px 24px}
+
+/* ═══ STATS ═══ */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:28px}
+.stat-card{
+  background:var(--bg3);
+  border:1px solid var(--border);
+  border-radius:16px;padding:20px;
+  position:relative;overflow:hidden;
+  transition:transform .2s,box-shadow .2s;
+  cursor:default;
+}
+.stat-card:hover{transform:translateY(-3px);box-shadow:0 8px 32px rgba(0,0,0,.3)}
+.stat-card::before{content:'';position:absolute;inset:0;opacity:0;transition:opacity .3s;border-radius:16px}
+.stat-card.blue::before{background:radial-gradient(circle at 0 0,var(--blue-dim),transparent 60%)}
+.stat-card.green::before{background:radial-gradient(circle at 0 0,var(--green-dim),transparent 60%)}
+.stat-card.yellow::before{background:radial-gradient(circle at 0 0,var(--yellow-dim),transparent 60%)}
+.stat-card.red::before{background:radial-gradient(circle at 0 0,var(--red-dim),transparent 60%)}
+.stat-card.purple::before{background:radial-gradient(circle at 0 0,var(--primary-glow),transparent 60%)}
+.stat-card:hover::before{opacity:1}
+.stat-ico{font-size:1.6rem;margin-bottom:10px}
+.stat-n{font-family:var(--font-display);font-size:2.2rem;font-weight:800;line-height:1;margin-bottom:4px}
+.stat-card.blue .stat-n{color:var(--blue)}
+.stat-card.green .stat-n{color:var(--green)}
+.stat-card.yellow .stat-n{color:var(--yellow)}
+.stat-card.red .stat-n{color:var(--red)}
+.stat-card.purple .stat-n{color:var(--primary2)}
+.stat-l{font-size:.7rem;color:var(--text3);text-transform:uppercase;letter-spacing:.8px;font-weight:600}
+
+/* ═══ ALERTAS VOZ ═══ */
+.voz-banner{
+  background:linear-gradient(135deg,rgba(239,68,68,.15),rgba(245,158,11,.1));
+  border:1px solid rgba(239,68,68,.3);
+  border-radius:14px;padding:16px 20px;margin-bottom:20px;
+  display:none;animation:slideDown .4s ease;
+}
+@keyframes slideDown{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:translateY(0)}}
+.voz-banner.show{display:block}
+.voz-title{font-size:.82rem;font-weight:700;color:#fca5a5;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px}
+.voz-items{display:flex;flex-direction:column;gap:6px}
+.voz-item{display:flex;align-items:center;justify-content:space-between;background:rgba(0,0,0,.2);border-radius:8px;padding:8px 12px;flex-wrap:wrap;gap:8px}
+.voz-item span{font-size:.82rem;color:var(--text)}
+
+/* ═══ SECCIÓN ═══ */
+.sec{background:var(--bg3);border:1px solid var(--border);border-radius:16px;margin-bottom:20px;overflow:hidden}
+.sec-hdr{
+  padding:16px 20px;
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;
+  background:linear-gradient(to right,rgba(99,102,241,.06),transparent);
+}
+.sec-hdr h2{font-size:.95rem;font-weight:700;color:white;display:flex;align-items:center;gap:8px}
+.sec-body{padding:18px}
+
+/* ═══ FILTROS ═══ */
+.filtros{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+.filtros input,.filtros select{
+  background:rgba(255,255,255,.05);border:1.5px solid var(--border2);
+  border-radius:10px;padding:9px 14px;
+  font-family:var(--font);font-size:.83rem;color:white;outline:none;
+  transition:all .2s;
+}
+.filtros input{flex:1;min-width:180px}
+.filtros input::placeholder{color:var(--text3)}
+.filtros input:focus,.filtros select:focus{border-color:var(--primary);background:rgba(99,102,241,.08)}
+.filtros select option{background:var(--bg3);color:white}
+
+/* ═══ USER CARD ═══ */
+.u-card{
+  background:var(--bg4);border:1px solid var(--border);
+  border-radius:12px;padding:16px 18px;
+  margin-bottom:10px;
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  transition:all .2s;
+  animation:cardSlide .4s ease both;
+}
+@keyframes cardSlide{from{opacity:0;transform:translateX(-16px)}to{opacity:1;transform:none}}
+.u-card:hover{border-color:var(--border2);background:rgba(255,255,255,.04)}
+.u-card.trial{border-left:3px solid var(--yellow)}
+.u-card.active{border-left:3px solid var(--green)}
+.u-card.denied{border-left:3px solid var(--red);opacity:.7}
+.u-card.expired{border-left:3px solid var(--text3);opacity:.6}
+.u-avatar{
+  width:46px;height:46px;border-radius:12px;
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--font-display);font-size:1.1rem;font-weight:800;color:white;
+  flex-shrink:0;
+}
+.u-info{flex:1;min-width:180px}
+.u-name{font-size:.97rem;font-weight:700;color:white;margin-bottom:3px}
+.u-email{font-size:.78rem;color:var(--text2);margin-bottom:5px}
+.u-meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.tag{display:inline-flex;align-items:center;gap:3px;font-size:.69rem;font-weight:700;padding:3px 9px;border-radius:99px}
+.tg-trial{background:var(--yellow-dim);color:#fde68a;border:1px solid rgba(245,158,11,.3)}
+.tg-active{background:var(--green-dim);color:#6ee7b7;border:1px solid rgba(16,185,129,.3)}
+.tg-denied{background:var(--red-dim);color:#fca5a5;border:1px solid rgba(239,68,68,.3)}
+.tg-expired{background:rgba(255,255,255,.06);color:var(--text3);border:1px solid var(--border)}
+.tg-blue{background:var(--blue-dim);color:#93c5fd;border:1px solid rgba(59,130,246,.3)}
+.u-days{font-size:.75rem;font-weight:700}
+.u-days.warn{color:var(--yellow)}
+.u-days.danger{color:var(--red)}
+.u-days.ok{color:var(--green)}
+.u-acts{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+
+/* Barra progreso trial */
+.trial-bar{width:100%;height:4px;background:rgba(255,255,255,.08);border-radius:2px;margin-top:6px;overflow:hidden}
+.trial-fill{height:100%;border-radius:2px;transition:width .8s ease}
+
+/* Empty state */
+.empty-state{text-align:center;padding:48px 20px;color:var(--text3)}
+.empty-state .ico{font-size:3rem;margin-bottom:12px;opacity:.5}
+.empty-state p{font-size:.9rem}
+
+/* ═══ MODAL ═══ */
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:500;display:flex;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px)}
+.modal-bg.hide{display:none}
+.modal{
+  background:var(--bg3);
+  border:1px solid var(--border2);
+  border-radius:20px;padding:28px;
+  width:100%;max-width:480px;
+  box-shadow:0 32px 80px rgba(0,0,0,.6);
+  animation:modalIn .3s cubic-bezier(.34,1.56,.64,1);
+}
+@keyframes modalIn{from{opacity:0;transform:scale(.92)}to{opacity:1;transform:scale(1)}}
+.modal h3{font-family:var(--font-display);font-size:1.15rem;color:white;margin-bottom:20px;display:flex;align-items:center;gap:8px}
+.mf{margin-bottom:14px}
+.mf label{display:block;font-size:.71rem;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.7px;margin-bottom:6px}
+.mf input,.mf select{
+  width:100%;background:rgba(255,255,255,.06);
+  border:1.5px solid var(--border2);border-radius:10px;
+  padding:11px 14px;font-family:var(--font);font-size:.9rem;color:white;outline:none;
+  transition:all .2s;
+}
+.mf input::placeholder{color:var(--text3)}
+.mf input:focus,.mf select:focus{border-color:var(--primary);background:rgba(99,102,241,.08)}
+.mf select option{background:var(--bg3)}
+.modal-btns{display:flex;gap:8px;justify-content:flex-end;margin-top:20px}
+
+/* ═══ TOAST ═══ */
+#toast{
+  position:fixed;bottom:24px;right:24px;z-index:999;
+  padding:13px 20px;border-radius:12px;
+  font-family:var(--font);font-size:.84rem;font-weight:600;
+  transform:translateY(80px);opacity:0;
+  transition:all .35s cubic-bezier(.34,1.56,.64,1);
+  max-width:340px;display:flex;align-items:center;gap:8px;
+  backdrop-filter:blur(10px);
+}
+#toast.show{transform:translateY(0);opacity:1}
+#toast.success{background:rgba(16,185,129,.2);border:1px solid rgba(16,185,129,.4);color:#6ee7b7}
+#toast.error{background:rgba(239,68,68,.2);border:1px solid rgba(239,68,68,.4);color:#fca5a5}
+#toast.info{background:rgba(99,102,241,.2);border:1px solid rgba(99,102,241,.4);color:#c7d2fe}
+#toast.warn{background:rgba(245,158,11,.2);border:1px solid rgba(245,158,11,.4);color:#fde68a}
+
+/* ═══ SCROLLBAR ═══ */
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
+
+/* ═══ RESPONSIVE ═══ */
+@media(max-width:600px){
+  .hdr{padding:12px 16px;flex-wrap:wrap}
+  .hdr-ticker{display:none}
+  .main{padding:16px 12px}
+  .stat-n{font-size:1.8rem}
+}
+
+/* ═══ ANIMACIÓN CONTADOR ═══ */
+@keyframes countUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.stat-n{animation:countUp .6s ease both}
+</style>
+</head>
+<body>
+
+<div class="bg-grid"></div>
+<div class="bg-orbs">
+  <div class="orb orb1"></div>
+  <div class="orb orb2"></div>
+  <div class="orb orb3"></div>
+</div>
+
+<!-- ══ LOGIN ══ -->
+<div class="screen" id="s-login">
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="ico">👁️</div>
+      <h1>Bitácora Admin</h1>
+      <p>Panel de administración · Solo propietario</p>
+    </div>
+    <div class="lf">
+      <label>Contraseña maestra</label>
+      <input type="password" id="masterPass" placeholder="••••••••••"
+        onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <button class="btn-login" onclick="doLogin()">Entrar al panel →</button>
+    <div class="err-login" id="errLogin">❌ Contraseña incorrecta</div>
+  </div>
+</div>
+
+<!-- ══ PANEL ══ -->
+<div class="screen" id="s-panel">
+
+  <!-- Header -->
+  <div class="hdr">
+    <div class="hdr-logo">
+      <div class="hdr-ico">👁️</div>
+      <div>
+        <div class="hdr-title">Bitácora Optométrica</div>
+        <div class="hdr-sub">Panel de administración</div>
+      </div>
+    </div>
+    <div class="hdr-ticker">
+      <div class="hdr-ticker-inner" id="ticker-text">Cargando datos...</div>
+    </div>
+    <div class="hdr-acts">
+      <button class="btn-sm btn-primary" onclick="abrirCrear()">➕ Nuevo usuario</button>
+      <button class="btn-sm btn-ghost" onclick="recargar()">🔄</button>
+      <button class="btn-salir" onclick="doLogout()">🚪 Salir</button>
+    </div>
+  </div>
+
+  <div class="main">
+
+    <!-- Alerta de voz / vencimientos -->
+    <div class="voz-banner" id="voz-banner">
+      <div class="voz-title">⚠️ Usuarios que requieren atención</div>
+      <div class="voz-items" id="voz-items"></div>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats-grid">
+      <div class="stat-card blue"><div class="stat-ico">👥</div><div class="stat-n" id="st-total">0</div><div class="stat-l">Total usuarios</div></div>
+      <div class="stat-card green"><div class="stat-ico">✅</div><div class="stat-n" id="st-active">0</div><div class="stat-l">Activos</div></div>
+      <div class="stat-card yellow"><div class="stat-ico">⏳</div><div class="stat-n" id="st-trial">0</div><div class="stat-l">En prueba</div></div>
+      <div class="stat-card red"><div class="stat-ico">🚫</div><div class="stat-n" id="st-denied">0</div><div class="stat-l">Bloqueados</div></div>
+      <div class="stat-card purple"><div class="stat-ico">⏰</div><div class="stat-n" id="st-expired">0</div><div class="stat-l">Expirados</div></div>
+    </div>
+
+    <!-- Sección usuarios -->
+    <div class="sec">
+      <div class="sec-hdr">
+        <h2>👥 Usuarios de la Bitácora</h2>
+        <div style="font-size:.75rem;color:var(--text3)" id="last-update">—</div>
+      </div>
+      <div class="sec-body">
+        <!-- Filtros -->
+        <div class="filtros">
+          <input type="text" id="f-buscar" placeholder="🔍 Buscar por nombre o correo..." oninput="renderUsers()">
+          <select id="f-status" onchange="renderUsers()">
+            <option value="">Todos los estados</option>
+            <option value="active">✅ Activos</option>
+            <option value="trial">⏳ En prueba</option>
+            <option value="denied">🚫 Bloqueados</option>
+            <option value="expired">⏰ Expirados</option>
+          </select>
+          <select id="f-order" onchange="renderUsers()">
+            <option value="recent">Más recientes</option>
+            <option value="name">Por nombre</option>
+            <option value="expiry">Por vencimiento</option>
+          </select>
+        </div>
+        <!-- Lista -->
+        <div id="users-list"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══ MODAL CREAR/EDITAR ══ -->
+<div class="modal-bg hide" id="modal-u">
+  <div class="modal">
+    <h3 id="modal-title">➕ Nuevo usuario</h3>
+    <div class="mf">
+      <label>Nombre completo</label>
+      <input type="text" id="m-nombre" placeholder="Nombre del optometrista">
+    </div>
+    <div class="mf">
+      <label>Correo electrónico</label>
+      <input type="email" id="m-email" placeholder="correo@ejemplo.com">
+    </div>
+    <div class="mf">
+      <label>Contraseña</label>
+      <input type="text" id="m-pass" placeholder="Contraseña de acceso">
+    </div>
+    <div class="mf">
+      <label>Rol / Puesto</label>
+      <input type="text" id="m-rol" placeholder="Ej. Optometrista, Asistente...">
+    </div>
+    <div class="mf">
+      <label>Estado</label>
+      <select id="m-status">
+        <option value="active">✅ Activo — acceso completo</option>
+        <option value="trial">⏳ Prueba — 7 días gratis</option>
+        <option value="denied">🚫 Bloqueado</option>
+      </select>
+    </div>
+    <div class="mf">
+      <label>Fecha de vencimiento (opcional)</label>
+      <input type="date" id="m-venc">
+    </div>
+    <div class="mf">
+      <label>Nota interna (para ti)</label>
+      <input type="text" id="m-nota" placeholder="Ej. Pagó mensualidad abril 2025">
+    </div>
+    <div class="modal-btns">
+      <button class="btn-sm btn-ghost" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn-sm btn-primary" id="btn-guardar" onclick="guardarUsuario()">💾 Guardar</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ══════════════════════════════════════
+//  CONFIG FIREBASE
+// ══════════════════════════════════════
+const FB_CFG = {
+  apiKey: "AIzaSyBtX91M46Mk-x2ncGGD3u5Gekm4hWk6VV4",
+  authDomain: "bitacora-optometrica.firebaseapp.com",
+  projectId: "bitacora-optometrica",
+  storageBucket: "bitacora-optometrica.firebasestorage.app",
+  messagingSenderId: "1048681778557",
+  appId: "1:1048681778557:web:99f7c5408b53bab7975014"
+};
+firebase.initializeApp(FB_CFG);
+const db = firebase.firestore();
+const USERS_COL = 'bita_usuarios';
+
+// ══════════════════════════════════════
+//  CONTRASEÑA MAESTRA
+// ══════════════════════════════════════
+const MASTER_PASS = 'Jarras2009@';
+// ↑ CAMBIA ESTO por tu contraseña segura
+
+// ══════════════════════════════════════
+//  LOGIN
+// ══════════════════════════════════════
+function doLogin(){
+  const p = document.getElementById('masterPass').value;
+  if(p === MASTER_PASS){
+    sessionStorage.setItem('bita_admin','1');
+    document.getElementById('s-login').style.display = 'none';
+    document.getElementById('s-panel').style.display = 'block';
+    iniciarPanel();
+  } else {
+    const err = document.getElementById('errLogin');
+    err.style.display = 'block';
+    document.getElementById('masterPass').value = '';
+    setTimeout(()=> err.style.display='none', 3000);
+    hablar('Contraseña incorrecta. Acceso denegado.');
+  }
+}
+function doLogout(){
+  sessionStorage.removeItem('bita_admin');
+  document.getElementById('s-panel').style.display = 'none';
+  document.getElementById('s-login').style.display = 'flex';
+  document.getElementById('masterPass').value = '';
+  if(unsubscribe) unsubscribe();
+}
+// Auto-login si hay sesión activa
+if(sessionStorage.getItem('bita_admin')==='1'){
+  document.getElementById('s-login').style.display = 'none';
+  document.getElementById('s-panel').style.display = 'block';
+}
+
+// ══════════════════════════════════════
+//  VOZ
+// ══════════════════════════════════════
+let vocesListas = false, vozES = null;
+function initVoces(){
+  const v = window.speechSynthesis?.getVoices();
+  if(v?.length){ vocesListas=true; vozES=v.find(x=>x.lang.startsWith('es'))||v[0]; }
+}
+if(window.speechSynthesis){ window.speechSynthesis.onvoiceschanged=initVoces; initVoces(); }
+function hablar(txt, rate=0.9){
+  if(!window.speechSynthesis) return;
+  if(!vocesListas){ initVoces(); setTimeout(()=>hablar(txt,rate),500); return; }
+  window.speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(txt);
+  u.lang='es-MX'; u.rate=rate; u.pitch=1.05;
+  if(vozES) u.voice=vozES;
+  window.speechSynthesis.speak(u);
+}
+
+// ══════════════════════════════════════
+//  TOAST
+// ══════════════════════════════════════
+let toastTimer;
+function toast(msg, type='info'){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `show ${type}`;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=> t.className='', 3800);
+}
+
+// ══════════════════════════════════════
+//  UTILS
+// ══════════════════════════════════════
+const today = () => new Date().toISOString().split('T')[0];
+function diasRestantes(venc){
+  if(!venc) return null;
+  const ahora = new Date(); ahora.setHours(0,0,0,0);
+  const fin = new Date(venc+'T00:00:00');
+  return Math.ceil((fin-ahora)/864e5);
+}
+function formatDate(d){
+  if(!d) return '—';
+  const[y,m,dd]=d.split('-');
+  return `${dd}/${m}/${y}`;
+}
+function avatarColor(nombre){
+  const colors = [
+    'linear-gradient(135deg,#6366f1,#818cf8)',
+    'linear-gradient(135deg,#10b981,#34d399)',
+    'linear-gradient(135deg,#f59e0b,#fbbf24)',
+    'linear-gradient(135deg,#ef4444,#f87171)',
+    'linear-gradient(135deg,#06b6d4,#22d3ee)',
+    'linear-gradient(135deg,#8b5cf6,#a78bfa)',
+    'linear-gradient(135deg,#ec4899,#f472b6)',
+  ];
+  const idx = (nombre||'?').charCodeAt(0) % colors.length;
+  return colors[idx];
+}
+
+// ══════════════════════════════════════
+//  DATOS — Firestore en tiempo real
+// ══════════════════════════════════════
+let todosUsers = [], unsubscribe = null;
+
+function iniciarPanel(){
+  if(sessionStorage.getItem('bita_admin')!=='1') return;
+  // Listener en tiempo real — escala hasta miles de usuarios
+  unsubscribe = db.collection(USERS_COL)
+    .orderBy('createdAt','desc')
+    .onSnapshot(snap => {
+      todosUsers = snap.docs.map(d=>({id:d.id,...d.data()}));
+      renderStats();
+      renderUsers();
+      renderTicker();
+      verificarVencimientos();
+      document.getElementById('last-update').textContent =
+        'Actualizado: ' + new Date().toLocaleTimeString('es-MX');
+    }, err => {
+      toast('Error de conexión: '+err.message, 'error');
+    });
+}
+
+function recargar(){
+  toast('🔄 Sincronizando...','info');
+}
+
+// ══════════════════════════════════════
+//  STATS
+// ══════════════════════════════════════
+function renderStats(){
+  const total   = todosUsers.length;
+  const active  = todosUsers.filter(u=>u.status==='active').length;
+  const trial   = todosUsers.filter(u=>u.status==='trial').length;
+  const denied  = todosUsers.filter(u=>u.status==='denied').length;
+  const expired = todosUsers.filter(u=>u.status==='expired').length;
+  animCount('st-total',   total);
+  animCount('st-active',  active);
+  animCount('st-trial',   trial);
+  animCount('st-denied',  denied);
+  animCount('st-expired', expired);
+}
+function animCount(id, target){
+  const el = document.getElementById(id);
+  let current = 0;
+  const step = Math.max(1, Math.floor(target/20));
+  const timer = setInterval(()=>{
+    current = Math.min(current+step, target);
+    el.textContent = current;
+    if(current>=target) clearInterval(timer);
+  }, 40);
+}
+
+// ══════════════════════════════════════
+//  TICKER
+// ══════════════════════════════════════
+function renderTicker(){
+  const active  = todosUsers.filter(u=>u.status==='active').length;
+  const trial   = todosUsers.filter(u=>u.status==='trial').length;
+  const expPronto = todosUsers.filter(u=>{
+    const d = diasRestantes(u.trialEnd||u.vencimiento);
+    return d!==null && d>=0 && d<=3;
+  }).length;
+  const msgs = [
+    `👁️ Bitácora Optométrica Admin Panel`,
+    `👥 ${todosUsers.length} usuarios registrados`,
+    `✅ ${active} activos`,
+    `⏳ ${trial} en periodo de prueba`,
+    expPronto>0 ? `⚠️ ${expPronto} usuario(s) vencen en los próximos 3 días` : `🟢 Sin vencimientos próximos`,
+    `🔒 Sistema seguro — Firebase Auth activo`,
+    `📊 Panel actualizado en tiempo real`,
+  ];
+  document.getElementById('ticker-text').textContent = msgs.join('   ·   ');
+}
+
+// ══════════════════════════════════════
+//  ALERTAS DE VENCIMIENTO + VOZ
+// ══════════════════════════════════════
+let vozAlertaDada = false;
+function verificarVencimientos(){
+  const urgentes = todosUsers.filter(u=>{
+    const d = diasRestantes(u.trialEnd||u.vencimiento);
+    return d!==null && d>=0 && d<=3 && u.status!=='denied';
+  });
+  const expirados = todosUsers.filter(u=>{
+    const d = diasRestantes(u.trialEnd||u.vencimiento);
+    return d!==null && d<0 && u.status==='trial';
+  });
+  const todos = [...urgentes,...expirados];
+  const banner = document.getElementById('voz-banner');
+  const items  = document.getElementById('voz-items');
+  if(!todos.length){ banner.classList.remove('show'); return; }
+  banner.classList.add('show');
+  items.innerHTML = todos.map(u=>{
+    const d = diasRestantes(u.trialEnd||u.vencimiento);
+    const label = d<0 ? `Expiró hace ${Math.abs(d)} día(s)` :
+                  d===0 ? 'Vence HOY' : `Vence en ${d} día(s)`;
+    const color = d<=0?'var(--red)':d<=1?'var(--red)':'var(--yellow)';
+    return `<div class="voz-item">
+      <span>⚠️ <strong>${u.nombre||u.email}</strong> — ${u.email}</span>
+      <span style="color:${color};font-weight:700">${label}</span>
+      <div style="display:flex;gap:6px">
+        <button class="btn-sm btn-warn" onclick="editarUsuario('${u.id}')">✏️ Gestionar</button>
+        <button class="btn-sm btn-ghost" onclick="hablar('Atención. El usuario ${(u.nombre||u.email).replace(/'/g,'')} vence en ${d} días. Por favor, contactarlo.')">🔊</button>
+      </div>
+    </div>`;
+  }).join('');
+  // Voz automática (solo una vez por sesión)
+  if(!vozAlertaDada && todos.length){
+    vozAlertaDada = true;
+    const msg = `Atención. Hay ${todos.length} usuario${todos.length>1?'s':''} con vencimiento próximo o expirado. Por favor revisa el panel.`;
+    setTimeout(()=>hablar(msg), 1500);
+  }
+}
+
+// ══════════════════════════════════════
+//  RENDER USUARIOS
+// ══════════════════════════════════════
+function renderUsers(){
+  const q      = (document.getElementById('f-buscar').value||'').toLowerCase();
+  const status = document.getElementById('f-status').value;
+  const order  = document.getElementById('f-order').value;
+  let users = todosUsers.filter(u=>{
+    const matchQ = !q ||
+      (u.nombre||'').toLowerCase().includes(q) ||
+      (u.email||'').toLowerCase().includes(q) ||
+      (u.rol||'').toLowerCase().includes(q);
+    const matchS = !status || u.status===status;
+    return matchQ && matchS;
+  });
+  // Ordenar
+  if(order==='name')   users.sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
+  if(order==='expiry') users.sort((a,b)=>{
+    const da = diasRestantes(a.trialEnd||a.vencimiento)??9999;
+    const db2= diasRestantes(b.trialEnd||b.vencimiento)??9999;
+    return da-db2;
+  });
+  const list = document.getElementById('users-list');
+  if(!users.length){
+    list.innerHTML = `<div class="empty-state"><div class="ico">👤</div><p>${q||status?'Sin resultados para ese filtro':'No hay usuarios registrados aún'}</p></div>`;
+    return;
+  }
+  list.innerHTML = users.map((u,i) => cardHTML(u, i)).join('');
+}
+
+function cardHTML(u, i){
+  const dias = diasRestantes(u.trialEnd||u.vencimiento);
+  const statusTag = {
+    active:  `<span class="tag tg-active">✅ Activo</span>`,
+    trial:   `<span class="tag tg-trial">⏳ Prueba</span>`,
+    denied:  `<span class="tag tg-denied">🚫 Bloqueado</span>`,
+    expired: `<span class="tag tg-expired">⏰ Expirado</span>`,
+  }[u.status] || `<span class="tag tg-blue">${u.status}</span>`;
+
+  // Barra de progreso del trial
+  let trialBar = '';
+  let daysLabel = '';
+  if(u.status==='trial' && dias!==null){
+    const pct = Math.max(0, Math.min(100, Math.round((dias/7)*100)));
+    const color = dias<=1?'var(--red)':dias<=3?'var(--yellow)':'var(--green)';
+    const cls   = dias<=1?'danger':dias<=3?'warn':'ok';
+    trialBar = `<div class="trial-bar"><div class="trial-fill" style="width:${pct}%;background:${color}"></div></div>`;
+    daysLabel = `<span class="u-days ${cls}">${dias<0?'Expirado':dias===0?'Vence hoy':`${dias}d restantes`}</span>`;
+  }
+  if(u.vencimiento && u.status==='active' && dias!==null){
+    const cls = dias<=3?'danger':dias<=7?'warn':'ok';
+    daysLabel = `<span class="u-days ${cls}">Suscripción: ${dias<0?'vencida':dias===0?'vence hoy':`${dias}d`}</span>`;
+  }
+
+  const creado = u.createdAt ? new Date(u.createdAt).toLocaleDateString('es-MX',{day:'2-digit',month:'short',year:'numeric'}) : '—';
+
+  return `<div class="u-card ${u.status}" style="animation-delay:${i*40}ms">
+    <div class="u-avatar" style="background:${avatarColor(u.nombre||u.email)}">${(u.nombre||u.email||'?').charAt(0).toUpperCase()}</div>
+    <div class="u-info">
+      <div class="u-name">${u.nombre||'Sin nombre'}</div>
+      <div class="u-email">✉️ ${u.email} ${u.rol?`&nbsp;·&nbsp; 🥼 ${u.rol}`:''}</div>
+      <div class="u-meta">
+        ${statusTag}
+        ${daysLabel}
+        <span class="tag tg-blue">📅 ${creado}</span>
+        ${u.notaPago?`<span class="tag" style="background:rgba(255,255,255,.06);color:var(--text2);border:1px solid var(--border)">💰 ${u.notaPago}</span>`:''}
+        ${u.emailVerified?'<span class="tag tg-active">✉️ Verificado</span>':'<span class="tag tg-denied">✉️ Sin verificar</span>'}
+      </div>
+      ${trialBar}
+    </div>
+    <div class="u-acts">
+      ${u.status==='trial'||u.status==='denied'||u.status==='expired'
+        ?`<button class="btn-sm btn-success" onclick="cambiarStatus('${u.id}','active')">✅ Activar</button>`:''
+      }
+      ${u.status==='active'
+        ?`<button class="btn-sm btn-warn" onclick="cambiarStatus('${u.id}','denied')">🚫 Bloquear</button>`:''
+      }
+      <button class="btn-sm btn-ghost" onclick="editarUsuario('${u.id}')">✏️ Editar</button>
+      <button class="btn-sm btn-ghost" onclick="resetPassword('${u.id}','${u.nombre||u.email}')">🔑 Pass</button>
+      <button class="btn-sm btn-danger" onclick="eliminarUsuario('${u.id}','${u.nombre||u.email}')">🗑</button>
+    </div>
+  </div>`;
+}
+
+// ══════════════════════════════════════
+//  ACCIONES
+// ══════════════════════════════════════
+async function cambiarStatus(id, status){
+  try{
+    const data = {status};
+    if(status==='active'){
+      const u = todosUsers.find(x=>x.id===id);
+      // Si activamos y no tiene vencimiento, damos 30 días por defecto
+      if(!u.vencimiento){
+        const v = new Date(); v.setDate(v.getDate()+30);
+        data.vencimiento = v.toISOString().split('T')[0];
+      }
+    }
+    await db.collection(USERS_COL).doc(id).update(data);
+    const u = todosUsers.find(x=>x.id===id);
+    const nombre = u?.nombre||u?.email||'Usuario';
+    const msgs = {
+      active: `${nombre} fue activado con éxito`,
+      denied: `${nombre} fue bloqueado`,
+      expired:`${nombre} marcado como expirado`
+    };
+    toast('✅ '+msgs[status], 'success');
+    hablar(msgs[status]+'. Cambio registrado en el sistema.');
+  }catch(e){ toast('❌ '+e.message,'error'); }
+}
+
+async function eliminarUsuario(id, nombre){
+  if(!confirm(`¿Eliminar permanentemente a "${nombre}"?\nEsta acción no se puede deshacer.`)) return;
+  try{
+    await db.collection(USERS_COL).doc(id).delete();
+    toast('🗑 Usuario eliminado: '+nombre,'info');
+  }catch(e){ toast('❌ '+e.message,'error'); }
+}
+
+// Reset password — actualiza en Firestore (la bitácora lo usa para login)
+async function resetPassword(id, nombre){
+  const nueva = prompt(`Nueva contraseña para "${nombre}":`);
+  if(!nueva || nueva.length<6){ if(nueva!==null) toast('Mínimo 6 caracteres','warn'); return; }
+  try{
+    await db.collection(USERS_COL).doc(id).update({password: nueva, passwordResetAt: new Date().toISOString()});
+    toast('🔑 Contraseña actualizada para: '+nombre,'success');
+    hablar(`Contraseña de ${nombre} actualizada correctamente.`);
+  }catch(e){ toast('❌ '+e.message,'error'); }
+}
+
+// ══════════════════════════════════════
+//  MODAL CREAR / EDITAR
+// ══════════════════════════════════════
+let editId = null;
+function abrirCrear(){
+  editId = null;
+  document.getElementById('modal-title').textContent = '➕ Nuevo usuario';
+  document.getElementById('btn-guardar').textContent = '💾 Crear usuario';
+  ['m-nombre','m-email','m-pass','m-rol','m-venc','m-nota'].forEach(id=>{
+    document.getElementById(id).value='';
+  });
+  document.getElementById('m-status').value = 'active';
+  document.getElementById('modal-u').classList.remove('hide');
+  setTimeout(()=>document.getElementById('m-nombre').focus(),100);
+}
+function editarUsuario(id){
+  const u = todosUsers.find(x=>x.id===id);
+  if(!u) return;
+  editId = id;
+  document.getElementById('modal-title').textContent = '✏️ Editar usuario';
+  document.getElementById('btn-guardar').textContent = '💾 Guardar cambios';
+  document.getElementById('m-nombre').value = u.nombre||'';
+  document.getElementById('m-email').value  = u.email||'';
+  document.getElementById('m-pass').value   = u.password||'';
+  document.getElementById('m-rol').value    = u.rol||'';
+  document.getElementById('m-status').value = u.status||'active';
+  document.getElementById('m-venc').value   = u.vencimiento||u.trialEnd?.split('T')[0]||'';
+  document.getElementById('m-nota').value   = u.notaPago||'';
+  document.getElementById('modal-u').classList.remove('hide');
+}
+function cerrarModal(){
+  document.getElementById('modal-u').classList.add('hide');
+  editId = null;
+}
+async function guardarUsuario(){
+  const nombre = document.getElementById('m-nombre').value.trim();
+  const email  = document.getElementById('m-email').value.trim();
+  const pass   = document.getElementById('m-pass').value.trim();
+  const rol    = document.getElementById('m-rol').value.trim();
+  const status = document.getElementById('m-status').value;
+  const venc   = document.getElementById('m-venc').value||null;
+  const nota   = document.getElementById('m-nota').value.trim();
+
+  if(!nombre||!email){ toast('Nombre y correo son obligatorios','warn'); return; }
+
+  const btn = document.getElementById('btn-guardar');
+  btn.disabled=true; btn.textContent='Guardando...';
+
+  try{
+    const data = {
+      nombre, email, rol, status,
+      notaPago: nota,
+      vencimiento: venc,
+      updatedAt: new Date().toISOString()
+    };
+    if(pass) data.password = pass;
+
+    if(editId){
+      await db.collection(USERS_COL).doc(editId).update(data);
+      toast('✅ Usuario actualizado: '+nombre,'success');
+      hablar(`Usuario ${nombre} actualizado correctamente.`);
+    } else {
+      // Crear nuevo — genera un ID único
+      const uid = 'manual_'+Date.now();
+      await db.collection(USERS_COL).doc(uid).set({
+        ...data,
+        uid,
+        emailVerified: true,  // creado manualmente = verificado
+        isAdmin: false,
+        createdAt: new Date().toISOString(),
+        trialEnd: status==='trial' ? (() => { const d=new Date(); d.setDate(d.getDate()+7); return d.toISOString(); })() : null
+      });
+      toast('✅ Usuario creado: '+nombre,'success');
+      hablar(`Usuario ${nombre} creado y activado correctamente.`);
+    }
+    cerrarModal();
+  }catch(e){ toast('❌ '+e.message,'error'); }
+  btn.disabled=false; btn.textContent = editId?'💾 Guardar cambios':'💾 Crear usuario';
+}
+
+// Cerrar modal con Escape
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') cerrarModal(); });
+document.getElementById('modal-u').addEventListener('click', e=>{
+  if(e.target===document.getElementById('modal-u')) cerrarModal();
+});
+
+// Enter en login
+document.getElementById('masterPass')?.addEventListener('keydown', e=>{
+  if(e.key==='Enter') doLogin();
+});
+
+// ══════════════════════════════════════
+//  ARRANCAR PANEL si ya hay sesión
+// ══════════════════════════════════════
+if(sessionStorage.getItem('bita_admin')==='1'){
+  iniciarPanel();
+}
+
+// ══════════════════════════════════════
+//  PROTECCIÓN BÁSICA
+// ══════════════════════════════════════
+document.addEventListener('contextmenu',e=>e.preventDefault());
+document.addEventListener('keydown',e=>{
+  if(e.key==='F12'||(e.ctrlKey&&e.shiftKey&&['I','J','C'].includes(e.key))||(e.ctrlKey&&e.key==='U')){
+    e.preventDefault();
+  }
+});
+</script>
+</body>
+</html>
