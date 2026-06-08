@@ -244,35 +244,56 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
 
 @media(max-width:768px){
   #login-screen{
+    position:fixed !important;
+    inset:0 !important;
+    min-height:100vh !important;
+    height:100% !important;
+    display:flex !important;
     align-items:center !important;
     justify-content:center !important;
     padding:16px !important;
-  }
-  .login-panel{
-    margin:auto !important;
-    padding:28px 22px 22px !important;
-    max-height:95vh;
-    overflow-y:auto;
+    overflow-y:auto !important;
   }
   .carousel{
     position:fixed !important;
+    inset:0 !important;
+    width:100% !important;
+    height:100% !important;
   }
-  .slide-caption{
-    display:none !important;
+  .slide{
+    position:fixed !important;
+    inset:0 !important;
+    width:100% !important;
+    height:100% !important;
   }
-  .dots{
-    bottom:8px !important;
+  .particles{
+    position:fixed !important;
+    inset:0 !important;
   }
-  .lp-logo-icon{
-    width:44px !important;
-    height:44px !important;
+  .login-panel{
+    position:relative !important;
+    z-index:10 !important;
+    width:100% !important;
+    max-width:100% !important;
+    margin:0 !important;
+    padding:24px 20px 20px !important;
+    border-radius:18px !important;
+    flex-shrink:0 !important;
   }
-  .lp-logo-text h1{
-    font-size:1.1rem !important;
-  }
-  .lp-title{
-    font-size:1.2rem !important;
-  }
+  .slide-caption{ display:none !important; }
+  .dots{ bottom:8px !important; z-index:10 !important; }
+  .lp-logo{ margin-bottom:10px !important; }
+  .lp-logo-icon{ width:40px !important; height:40px !important; font-size:20px !important; }
+  .lp-logo-text h1{ font-size:1.05rem !important; }
+  .lp-divider{ margin:12px 0 !important; }
+  .lp-tabs{ margin-bottom:14px !important; }
+  .lp-title{ font-size:1.2rem !important; margin-bottom:2px !important; }
+  .lp-sub{ font-size:.75rem !important; margin-bottom:12px !important; }
+  .lp-fg{ margin-bottom:10px !important; }
+  .lp-fg input{ padding:10px 13px 10px 34px !important; font-size:.85rem !important; }
+  .lp-btn{ padding:12px !important; font-size:.88rem !important; }
+  .lp-hint{ font-size:.69rem !important; margin-top:10px !important; padding:7px 10px !important; }
+  .lp-link{ margin-top:10px !important; font-size:.74rem !important; }
 }
 </style>
 
