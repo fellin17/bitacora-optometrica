@@ -494,22 +494,23 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
 
 <script>
 // ══ PWA — Service Worker + Install Prompt ══
+// Desregistrar SWs viejos y limpiar caché
 if('serviceWorker' in navigator){
+  // Primero desregistrar cualquier SW viejo
+  navigator.serviceWorker.getRegistrations().then(regs=>{
+    regs.forEach(reg=>reg.unregister());
+  });
+  // Limpiar todos los caches viejos
+  if('caches' in window){
+    caches.keys().then(keys=>keys.forEach(k=>caches.delete(k)));
+  }
+  // Registrar nuevo SW después de limpiar
   window.addEventListener('load', ()=>{
-    navigator.serviceWorker.register('sw.js')
-      .then(reg => {
-        console.log('SW registrado:', reg.scope);
-        // Notificar si hay actualización disponible
-        reg.addEventListener('updatefound', ()=>{
-          const newSW = reg.installing;
-          newSW.addEventListener('statechange', ()=>{
-            if(newSW.state==='installed' && navigator.serviceWorker.controller){
-              showInstallToast('🔄 Nueva versión disponible — recarga para actualizar');
-            }
-          });
-        });
-      })
-      .catch(err => console.warn('SW error:', err));
+    setTimeout(()=>{
+      navigator.serviceWorker.register('sw.js?v=3')
+        .then(reg => console.log('SW v3 registrado'))
+        .catch(err => console.warn('SW error:', err));
+    }, 2000);
   });
 }
 
@@ -599,22 +600,23 @@ function showInstallToast(msg){
 
 <script>
 // ══ PWA — Service Worker + Install Prompt ══
+// Desregistrar SWs viejos y limpiar caché
 if('serviceWorker' in navigator){
+  // Primero desregistrar cualquier SW viejo
+  navigator.serviceWorker.getRegistrations().then(regs=>{
+    regs.forEach(reg=>reg.unregister());
+  });
+  // Limpiar todos los caches viejos
+  if('caches' in window){
+    caches.keys().then(keys=>keys.forEach(k=>caches.delete(k)));
+  }
+  // Registrar nuevo SW después de limpiar
   window.addEventListener('load', ()=>{
-    navigator.serviceWorker.register('sw.js')
-      .then(reg => {
-        console.log('SW registrado:', reg.scope);
-        // Notificar si hay actualización disponible
-        reg.addEventListener('updatefound', ()=>{
-          const newSW = reg.installing;
-          newSW.addEventListener('statechange', ()=>{
-            if(newSW.state==='installed' && navigator.serviceWorker.controller){
-              showInstallToast('🔄 Nueva versión disponible — recarga para actualizar');
-            }
-          });
-        });
-      })
-      .catch(err => console.warn('SW error:', err));
+    setTimeout(()=>{
+      navigator.serviceWorker.register('sw.js?v=3')
+        .then(reg => console.log('SW v3 registrado'))
+        .catch(err => console.warn('SW error:', err));
+    }, 2000);
   });
 }
 

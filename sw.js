@@ -2,7 +2,7 @@
 //  SERVICE WORKER — Bitácora Optométrica
 //  Versión: 1.0
 // ══════════════════════════════════════
-const CACHE_NAME = 'bitacora-v1';
+const CACHE_NAME = 'bitacora-v3';
 const CACHE_URLS = [
   '/bitacora-optometrica/',
   '/bitacora-optometrica/index.html',
