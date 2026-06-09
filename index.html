@@ -1,6 +1,3 @@
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
 <!DOCTYPE html>
 <html lang="es" data-theme="light">
 <head>
@@ -400,930 +397,336 @@ const SLIDES=[{"src":"data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAk
 </script>
 
 <script>
-// ════════════════════════════════════════════════════════
-//  FIREBASE — AUTH + FIRESTORE
-//  bitacora-optometrica
-// ════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════
+//  FIREBASE REST API — funciona en cualquier celular
+// ════════════════════════════════════════════════════
+const FB_API_KEY = "AIzaSyBtX91M46Mk-x2ncGGD3u5Gekm4hWk6VV4";
+const FB_PROJECT = "bitacora-optometrica";
+const USERS_COL     = 'bita_usuarios';
+const PACIENTES_COL = 'bita_pacientes';
 
-const FB_API_KEY  = "AIzaSyBtX91M46Mk-x2ncGGD3u5Gekm4hWk6VV4";
-const FB_PROJECT  = "bitacora-optometrica";
-const FB_CFG = {
-  apiKey: FB_API_KEY,
-  authDomain: "bitacora-optometrica.firebaseapp.com",
-  projectId: FB_PROJECT,
-  storageBucket: "bitacora-optometrica.firebasestorage.app",
-  messagingSenderId: "1048681778557",
-  appId: "1:1048681778557:web:99f7c5408b53bab7975014"
-};
+// Token en memoria (sin indexedDB)
+let _idToken = null, _uid = null;
+const setToken = (t,u)=>{ _idToken=t; _uid=u; };
+const getToken = ()=>_idToken;
+const getUid   = ()=>_uid;
 
-firebase.initializeApp(FB_CFG);
+// Estado global
+let currentUser=null, currentUserDoc=null, carTimer=null;
 
-// Usar NONE para evitar indexedDB en todos los dispositivos
-firebase.auth().setPersistence(firebase.auth.Auth.Persistence.NONE).catch(()=>{});
-
-// ════ API REST DE FIREBASE — funciona en cualquier celular ════
-async function restLogin(email, pass){
-  const url = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FB_API_KEY}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({email, password: pass, returnSecureToken: true})
+// ════ REST: Auth ════
+async function restLogin(email,pass){
+  const r = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FB_API_KEY}`,{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({email,password:pass,returnSecureToken:true})
   });
-  const data = await res.json();
-  if(data.error) throw {code: 'auth/'+data.error.message.toLowerCase().replace(/ /g,'_'), message: data.error.message};
-  return data; // {idToken, localId, email, emailVerified, ...}
+  const d = await r.json();
+  if(d.error) throw {code:d.error.message, message:d.error.message};
+  return d;
 }
-
-async function restRegister(email, pass){
-  const url = `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${FB_API_KEY}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({email, password: pass, returnSecureToken: true})
+async function restRegister(email,pass){
+  const r = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${FB_API_KEY}`,{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({email,password:pass,returnSecureToken:true})
   });
-  const data = await res.json();
-  if(data.error) throw {code: 'auth/'+data.error.message.toLowerCase().replace(/ /g,'_'), message: data.error.message};
-  return data;
+  const d = await r.json();
+  if(d.error) throw {code:d.error.message, message:d.error.message};
+  return d;
 }
-
-async function restGetUserInfo(idToken){
-  const url = `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${FB_API_KEY}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({idToken})
+async function restGetUser(idToken){
+  const r = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${FB_API_KEY}`,{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({idToken})
   });
-  const data = await res.json();
-  if(data.error) throw data.error;
-  return data.users[0];
+  const d = await r.json();
+  if(d.error) throw d.error;
+  return d.users[0];
 }
-
 async function restSendVerification(idToken){
-  const url = `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${FB_API_KEY}`;
-  await fetch(url, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({requestType:'VERIFY_EMAIL', idToken})
+  await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${FB_API_KEY}`,{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({requestType:'VERIFY_EMAIL',idToken})
   });
 }
 
-// Firestore REST API
-async function fsGet(collection, docId, idToken){
-  const url = `https://firestore.googleapis.com/v1/projects/${FB_PROJECT}/databases/(default)/documents/${collection}/${docId}`;
-  const res = await fetch(url, {
-    headers: idToken ? {'Authorization': `Bearer ${idToken}`} : {}
-  });
-  if(!res.ok) return null;
-  const data = await res.json();
-  return fsParseDoc(data);
-}
+// ════ REST: Firestore ════
+function fsHeaders(token){ return {'Content-Type':'application/json',...(token?{'Authorization':`Bearer ${token}`}:{})}; }
+function fsBase(col,doc){ return `https://firestore.googleapis.com/v1/projects/${FB_PROJECT}/databases/(default)/documents/${col}${doc?'/'+doc:''}`; }
 
-async function fsSet(collection, docId, fields, idToken){
-  const url = `https://firestore.googleapis.com/v1/projects/${FB_PROJECT}/databases/(default)/documents/${collection}/${docId}`;
-  const body = {fields: fsEncodeFields(fields)};
-  await fetch(url, {
-    method: 'PATCH',
-    headers: {'Content-Type':'application/json', ...(idToken?{'Authorization':`Bearer ${idToken}`}:{})},
-    body: JSON.stringify(body)
-  });
-}
-
-async function fsQuery(collection, field, value, idToken){
-  const url = `https://firestore.googleapis.com/v1/projects/${FB_PROJECT}/databases/(default)/documents:runQuery`;
-  const body = {structuredQuery:{from:[{collectionId:collection}],where:{fieldFilter:{field:{fieldPath:field},op:'EQUAL',value:{stringValue:value}}}}};
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {'Content-Type':'application/json',...(idToken?{'Authorization':`Bearer ${idToken}`}:{})},
-    body: JSON.stringify(body)
-  });
-  const data = await res.json();
-  return (data||[]).filter(d=>d.document).map(d=>({id:d.document.name.split('/').pop(),...fsParseDoc(d.document)}));
-}
-
-async function fsAddDoc(collection, fields, idToken){
-  const url = `https://firestore.googleapis.com/v1/projects/${FB_PROJECT}/databases/(default)/documents/${collection}`;
-  const body = {fields: fsEncodeFields(fields)};
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {'Content-Type':'application/json',...(idToken?{'Authorization':`Bearer ${idToken}`}:{})},
-    body: JSON.stringify(body)
-  });
-  const data = await res.json();
-  return data.name?.split('/').pop();
-}
-
-async function fsUpdateDoc(collection, docId, fields, idToken){
-  const fieldPaths = Object.keys(fields).join(',');
-  const url = `https://firestore.googleapis.com/v1/projects/${FB_PROJECT}/databases/(default)/documents/${collection}/${docId}?updateMask.fieldPaths=${Object.keys(fields).join('&updateMask.fieldPaths=')}`;
-  const body = {fields: fsEncodeFields(fields)};
-  await fetch(url, {
-    method: 'PATCH',
-    headers: {'Content-Type':'application/json',...(idToken?{'Authorization':`Bearer ${idToken}`}:{})},
-    body: JSON.stringify(body)
-  });
-}
-
-async function fsDeleteDoc(collection, docId, idToken){
-  const url = `https://firestore.googleapis.com/v1/projects/${FB_PROJECT}/databases/(default)/documents/${collection}/${docId}`;
-  await fetch(url, {method:'DELETE', headers: idToken?{'Authorization':`Bearer ${idToken}`}:{}});
-}
-
-// Helpers para convertir datos Firestore REST ↔ JS
-function fsParseDoc(doc){
+function fsParse(doc){
   if(!doc||!doc.fields) return null;
-  const out = {};
-  for(const [k,v] of Object.entries(doc.fields)){
-    if(v.stringValue !== undefined) out[k] = v.stringValue;
-    else if(v.integerValue !== undefined) out[k] = parseInt(v.integerValue);
-    else if(v.doubleValue !== undefined) out[k] = parseFloat(v.doubleValue);
-    else if(v.booleanValue !== undefined) out[k] = v.booleanValue;
-    else if(v.arrayValue) out[k] = (v.arrayValue.values||[]).map(i=>i.stringValue||i.integerValue||i.booleanValue||'');
-    else if(v.nullValue !== undefined) out[k] = null;
-    else out[k] = JSON.stringify(v);
+  const o={};
+  for(const[k,v] of Object.entries(doc.fields)){
+    if(v.stringValue!==undefined)o[k]=v.stringValue;
+    else if(v.integerValue!==undefined)o[k]=parseInt(v.integerValue);
+    else if(v.doubleValue!==undefined)o[k]=parseFloat(v.doubleValue);
+    else if(v.booleanValue!==undefined)o[k]=v.booleanValue;
+    else if(v.arrayValue)o[k]=(v.arrayValue.values||[]).map(i=>i.stringValue||'');
+    else if(v.nullValue!==undefined)o[k]=null;
+    else o[k]='';
   }
-  return out;
+  return o;
 }
-
-function fsEncodeFields(obj){
-  const out = {};
-  for(const [k,v] of Object.entries(obj)){
-    if(v === null || v === undefined) out[k] = {nullValue: null};
-    else if(typeof v === 'boolean') out[k] = {booleanValue: v};
-    else if(typeof v === 'number') out[k] = Number.isInteger(v)?{integerValue:String(v)}:{doubleValue:v};
-    else if(Array.isArray(v)) out[k] = {arrayValue:{values: v.map(i=>({stringValue:String(i)}))}};
-    else out[k] = {stringValue: String(v)};
+function fsEncode(obj){
+  const o={};
+  for(const[k,v] of Object.entries(obj)){
+    if(v===null||v===undefined)o[k]={nullValue:null};
+    else if(typeof v==='boolean')o[k]={booleanValue:v};
+    else if(typeof v==='number')o[k]=Number.isInteger(v)?{integerValue:String(v)}:{doubleValue:v};
+    else if(Array.isArray(v))o[k]={arrayValue:{values:v.map(i=>({stringValue:String(i)}))}};
+    else o[k]={stringValue:String(v)};
   }
-  return out;
+  return o;
 }
-
-// Token storage (en memoria — sin indexedDB)
-let _idToken = null;
-let _uid = null;
-function setToken(token, uid){ _idToken = token; _uid = uid; }
-function getToken(){ return _idToken; }
-function getUid(){ return _uid; }
-
-const auth = firebase.auth();
-const db   = firebase.firestore();
-const USERS_COL    = 'bita_usuarios';
-const PACIENTES_COL= 'bita_pacientes';
-
-// ── Estado global ──
-let currentUser = null, currentUserDoc = null, carTimer = null;
-
-// ════════════════════════════════════════════════════════
-//  CARRUSEL
-// ════════════════════════════════════════════════════════
-let curSlide = 0;
-function buildCarousel(){
-  const car = document.getElementById('carousel');
-  const dotsEl = document.getElementById('dots');
-  if(!car||!dotsEl) return;
-  car.innerHTML = ''; dotsEl.innerHTML = '';
-  SLIDES.forEach((s,i)=>{
-    const d = document.createElement('div');
-    d.className = 'slide'+(i===0?' active':'');
-    d.style.backgroundImage = `url(${s.src})`;
-    car.appendChild(d);
-    const dot = document.createElement('div');
-    dot.className = 'dot'+(i===0?' active':'');
-    dot.onclick = ()=>goSlide(i);
-    dotsEl.appendChild(dot);
+async function fsGet(col,docId,token){
+  const r=await fetch(fsBase(col,docId),{headers:fsHeaders(token)});
+  if(!r.ok) return null;
+  return fsParse(await r.json());
+}
+async function fsSet(col,docId,data,token){
+  const keys=Object.keys(data).map(k=>`updateMask.fieldPaths=${k}`).join('&');
+  await fetch(fsBase(col,docId)+'?'+keys,{
+    method:'PATCH',headers:fsHeaders(token),
+    body:JSON.stringify({fields:fsEncode(data)})
   });
-  showCap(0); startCar();
+}
+async function fsAdd(col,data,token){
+  const r=await fetch(fsBase(col),{
+    method:'POST',headers:fsHeaders(token),
+    body:JSON.stringify({fields:fsEncode(data)})
+  });
+  const d=await r.json();
+  return d.name?.split('/').pop();
+}
+async function fsDelete(col,docId,token){
+  await fetch(fsBase(col,docId),{method:'DELETE',headers:fsHeaders(token)});
+}
+async function fsQuery(col,field,value,token){
+  const r=await fetch(`https://firestore.googleapis.com/v1/projects/${FB_PROJECT}/databases/(default)/documents:runQuery`,{
+    method:'POST',headers:fsHeaders(token),
+    body:JSON.stringify({structuredQuery:{from:[{collectionId:col}],where:{fieldFilter:{field:{fieldPath:field},op:'EQUAL',value:{stringValue:value}}}}})
+  });
+  const data=await r.json();
+  return (data||[]).filter(d=>d.document).map(d=>({id:d.document.name.split('/').pop(),...fsParse(d.document)}));
+}
+
+// ════ CARRUSEL ════
+let curSlide=0;
+function buildCarousel(){
+  const car=document.getElementById('carousel'),dotsEl=document.getElementById('dots');
+  if(!car||!dotsEl) return;
+  car.innerHTML='';dotsEl.innerHTML='';
+  SLIDES.forEach((s,i)=>{
+    const d=document.createElement('div');d.className='slide'+(i===0?' active':'');d.style.backgroundImage=`url(${s.src})`;car.appendChild(d);
+    const dot=document.createElement('div');dot.className='dot'+(i===0?' active':'');dot.onclick=()=>goSlide(i);dotsEl.appendChild(dot);
+  });
+  showCap(0);startCar();
 }
 function goSlide(idx){
-  const slides = document.querySelectorAll('.slide');
-  const dotEls = document.querySelectorAll('.dot');
-  if(!slides.length) return;
-  slides[curSlide]?.classList.remove('active');
-  dotEls[curSlide]?.classList.remove('active');
-  curSlide = ((idx%SLIDES.length)+SLIDES.length)%SLIDES.length;
-  slides[curSlide]?.classList.add('active');
-  dotEls[curSlide]?.classList.add('active');
+  document.querySelectorAll('.slide')[curSlide]?.classList.remove('active');
+  document.querySelectorAll('.dot')[curSlide]?.classList.remove('active');
+  curSlide=((idx%SLIDES.length)+SLIDES.length)%SLIDES.length;
+  document.querySelectorAll('.slide')[curSlide]?.classList.add('active');
+  document.querySelectorAll('.dot')[curSlide]?.classList.add('active');
   showCap(curSlide);
 }
-function showCap(i){
-  const c=document.getElementById('slide-caption');
-  if(!c) return;
-  c.classList.remove('show');
-  setTimeout(()=>{c.textContent=SLIDES[i].cap;c.classList.add('show');},350);
-}
-function startCar(){
-  if(carTimer)clearInterval(carTimer);
-  carTimer=setInterval(()=>goSlide(curSlide+1),3000);
-}
+function showCap(i){const c=document.getElementById('slide-caption');if(!c)return;c.classList.remove('show');setTimeout(()=>{c.textContent=SLIDES[i].cap;c.classList.add('show');},350);}
+function startCar(){if(carTimer)clearInterval(carTimer);carTimer=setInterval(()=>goSlide(curSlide+1),3000);}
 function buildParticles(){
-  const p=document.getElementById('particles');
-  if(!p) return;
-  for(let i=0;i<20;i++){
-    const el=document.createElement('div');
-    el.className='particle';
-    el.style.cssText=`left:${Math.random()*100}%;animation-duration:${7+Math.random()*10}s;animation-delay:${Math.random()*8}s;width:${1+Math.random()*2}px;height:${1+Math.random()*2}px;opacity:${.1+Math.random()*.4}`;
-    p.appendChild(el);
-  }
+  const p=document.getElementById('particles');if(!p)return;
+  for(let i=0;i<20;i++){const el=document.createElement('div');el.className='particle';el.style.cssText=`left:${Math.random()*100}%;animation-duration:${7+Math.random()*10}s;animation-delay:${Math.random()*8}s;width:${1+Math.random()*2}px;height:${1+Math.random()*2}px;opacity:${.1+Math.random()*.4}`;p.appendChild(el);}
 }
 
-// ════════════════════════════════════════════════════════
-//  AUDIO
-// ════════════════════════════════════════════════════════
+// ════ AUDIO ════
 const AC=window.AudioContext||window.webkitAudioContext;
 let actx=null,soundEnabled=true;
 const gc=()=>{if(!actx)actx=new AC();return actx};
 const tone=(f1,f2,d,t='sine',v=.14)=>{if(!soundEnabled)return;try{const c=gc(),o=c.createOscillator(),g=c.createGain();o.type=t;o.frequency.setValueAtTime(f1,c.currentTime);if(f2)o.frequency.exponentialRampToValueAtTime(f2,c.currentTime+d*.8);g.gain.setValueAtTime(v,c.currentTime);g.gain.exponentialRampToValueAtTime(.001,c.currentTime+d);o.connect(g);g.connect(c.destination);o.start(c.currentTime);o.stop(c.currentTime+d);}catch(e){}};
-const playKeySound=()=>tone(900,400,.08,'sine',.15);
-const playDeleteSound=()=>tone(400,200,.08,'sine',.11);
-const playClickSound=()=>tone(600,450,.06,'sine',.12);
-const playCheckSound=()=>tone(800,1100,.1,'sine',.09);
-const playErrorSound=()=>tone(220,110,.22,'sawtooth',.14);
+const playKeySound=()=>tone(900,400,.08);
+const playDeleteSound=()=>tone(400,200,.08);
+const playClickSound=()=>tone(600,450,.06);
+const playCheckSound=()=>tone(800,1100,.1);
+const playErrorSound=()=>tone(220,110,.22,'sawtooth');
 function playSuccessSound(){if(!soundEnabled)return;try{const c=gc();[523.25,659.25,783.99,1046.5].forEach((f,i)=>{const o=c.createOscillator(),g=c.createGain();o.type='sine';o.frequency.value=f;const t=c.currentTime+i*.09;g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.2,t+.02);g.gain.exponentialRampToValueAtTime(.001,t+.38);o.connect(g);g.connect(c.destination);o.start(t);o.stop(t+.39);});}catch(e){}}
 function toggleSound(){soundEnabled=!soundEnabled;const dot=document.getElementById('sound-dot');const lbl=document.getElementById('sound-label');if(dot)dot.className='sound-dot'+(soundEnabled?'':' off');if(lbl)lbl.textContent=soundEnabled?'Sonido':'Mudo';}
 document.addEventListener('keydown',e=>{const t=document.activeElement?.tagName;if(!['INPUT','TEXTAREA','SELECT'].includes(t))return;if(e.key==='Backspace'||e.key==='Delete')playDeleteSound();else if(e.key==='Enter')playClickSound();else if(e.key.length===1)playKeySound();});
 document.addEventListener('change',e=>{if(e.target.type==='checkbox')playCheckSound();if(e.target.tagName==='SELECT')playClickSound();});
 
-// ════════════════════════════════════════════════════════
-//  VOZ
-// ════════════════════════════════════════════════════════
+// ════ VOZ ════
 let vocesOk=false,vozES=null;
 function initVoces(){const v=window.speechSynthesis?.getVoices();if(v?.length){vocesOk=true;vozES=v.find(x=>x.lang.startsWith('es'))||v[0];}}
 if(window.speechSynthesis){window.speechSynthesis.onvoiceschanged=initVoces;initVoces();}
 function speak(txt,rate=.9){if(!window.speechSynthesis)return;if(!vocesOk){initVoces();setTimeout(()=>speak(txt,rate),400);return;}window.speechSynthesis.cancel();const m=new SpeechSynthesisUtterance(txt);m.lang='es-MX';m.rate=rate;m.pitch=1.05;if(vozES)m.voice=vozES;window.speechSynthesis.speak(m);}
 
-// ════════════════════════════════════════════════════════
-//  TEMA
-// ════════════════════════════════════════════════════════
+// ════ TEMA ════
 let darkMode=localStorage.getItem('bita_dark')==='true';
 function applyTheme(){document.documentElement.setAttribute('data-theme',darkMode?'dark':'light');const b=document.getElementById('theme-btn');if(b)b.textContent=darkMode?'☀️ Claro':'🌙 Oscuro';}
 function toggleTheme(){darkMode=!darkMode;localStorage.setItem('bita_dark',darkMode);applyTheme();}
 applyTheme();
 
-// ════════════════════════════════════════════════════════
-//  PANTALLAS
-// ════════════════════════════════════════════════════════
+// ════ PANTALLAS ════
 function showScreen(id){
   ['login-screen','verify-screen','trial-screen','app'].forEach(s=>{
     const el=document.getElementById(s);
-    if(el) el.style.display = s===id?(s==='app'?'block':'flex'):'none';
+    if(el)el.style.display=s===id?(s==='app'?'block':'flex'):'none';
   });
 }
 
-// ════════════════════════════════════════════════════════
-//  LOGIN TABS
-// ════════════════════════════════════════════════════════
+// ════ LOGIN TABS ════
 function lpTab(tab){
-  document.getElementById('lp-login').style.display    = tab==='login'   ?'block':'none';
-  document.getElementById('lp-register').style.display = tab==='register'?'block':'none';
+  document.getElementById('lp-login').style.display=tab==='login'?'block':'none';
+  document.getElementById('lp-register').style.display=tab==='register'?'block':'none';
   document.querySelectorAll('.lp-tab').forEach((b,i)=>b.classList.toggle('active',(i===0)===(tab==='login')));
-  document.getElementById('lp-link-row').innerHTML = tab==='login'
-    ? '¿No tienes cuenta? <span onclick="lpTab(\'register\')">Registrarse</span>'
-    : '¿Ya tienes cuenta? <span onclick="lpTab(\'login\')">Iniciar sesión</span>';
+  document.getElementById('lp-link-row').innerHTML=tab==='login'
+    ?'¿No tienes cuenta? <span onclick="lpTab(\'register\')">Registrarse</span>'
+    :'¿Ya tienes cuenta? <span onclick="lpTab(\'login\')">Iniciar sesión</span>';
 }
 function togglePw(id,btn){const el=document.getElementById(id);const s=el.type==='password';el.type=s?'text':'password';btn.textContent=s?'🙈':'👁';}
 function showLpMsg(id,type,text){const el=document.getElementById(id);if(!el)return;el.className=`lp-msg ${type} show`;el.innerHTML=(type==='error'?'⚠️ ':'ℹ️ ')+text;}
 
-// ════════════════════════════════════════════════════════
-//  REGISTRO
-// ════════════════════════════════════════════════════════
-async function doRegister(){
-  const nombre = document.getElementById('reg-nombre').value.trim();
-  const email  = document.getElementById('reg-email').value.trim();
-  const pass   = document.getElementById('reg-pass').value;
-  const rol    = document.getElementById('reg-rol').value.trim() || 'Optometrista';
+// ════ LOGIN ════
+async function doLogin(){
+  const email=document.getElementById('li-user').value.trim();
+  const pass=document.getElementById('li-pass').value;
+  if(!email||!pass){showLpMsg('lp-login-msg','error','Completa correo y contraseña.');return;}
+  const btn=document.getElementById('btn-login');
+  if(btn){btn.disabled=true;btn.textContent='Entrando...';}
+  try {
+    const d=await restLogin(email,pass);
+    setToken(d.idToken,d.localId);
+    const u=await restGetUser(d.idToken);
+    if(!u.emailVerified){
+      setToken(null,null);
+      showLpMsg('lp-login-msg','error','Verifica tu correo antes de entrar. Revisa también la carpeta SPAM.');
+      if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
+      return;
+    }
+    let ud=await fsGet(USERS_COL,d.localId,d.idToken);
+    if(!ud){
+      ud={uid:d.localId,nombre:email.split('@')[0],email,rol:'Optometrista',status:'trial',
+        trialEnd:new Date(Date.now()+7*24*60*60*1000).toISOString(),
+        emailVerified:true,createdAt:new Date().toISOString(),isAdmin:false};
+      fsSet(USERS_COL,d.localId,ud,d.idToken).catch(()=>{});
+    }
+    if(ud.status==='denied'){showLpMsg('lp-login-msg','error','Tu acceso fue denegado. Contacta al administrador.');setToken(null,null);if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}return;}
+    if(ud.status==='expired'){showLpMsg('lp-login-msg','error','Tu periodo de prueba expiró. Contacta al administrador.');setToken(null,null);if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}return;}
+    if(ud.status==='trial'&&ud.trialEnd&&new Date()>new Date(ud.trialEnd)){
+      fsSet(USERS_COL,d.localId,{status:'expired'},d.idToken).catch(()=>{});
+      showTrialExpired();setToken(null,null);if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}return;
+    }
+    currentUser={uid:d.localId,email};currentUserDoc=ud;
+    entrarSistema(ud);
+  } catch(e){
+    const msgs={'EMAIL_NOT_FOUND':'No existe una cuenta con ese correo.','INVALID_PASSWORD':'Contraseña incorrecta.','INVALID_LOGIN_CREDENTIALS':'Correo o contraseña incorrectos.','USER_DISABLED':'Esta cuenta fue deshabilitada.','TOO_MANY_ATTEMPTS_TRY_LATER':'Demasiados intentos. Espera unos minutos.'};
+    showLpMsg('lp-login-msg','error',msgs[e.code]||('Error: '+(e.message||'Sin conexión')));
+    playErrorSound();
+    if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
+  }
+}
 
+// ════ REGISTRO ════
+async function doRegister(){
+  const nombre=document.getElementById('reg-nombre').value.trim();
+  const email=document.getElementById('reg-email').value.trim();
+  const pass=document.getElementById('reg-pass').value;
+  const rol=document.getElementById('reg-rol').value.trim()||'Optometrista';
   if(!nombre||!email||!pass){showLpMsg('lp-reg-msg','error','Todos los campos son obligatorios.');return;}
   if(pass.length<6){showLpMsg('lp-reg-msg','error','Contraseña mínimo 6 caracteres.');return;}
-  if(!/\S+@\S+\.\S+/.test(email)){showLpMsg('lp-reg-msg','error','Correo inválido.');return;}
-
-  const btn = document.getElementById('btn-register');
+  const btn=document.getElementById('btn-register');
   if(btn){btn.disabled=true;btn.textContent='Registrando...';}
-
   try {
-    // Crear cuenta via REST
-    const authData = await restRegister(email, pass);
-    const idToken  = authData.idToken;
-    const uid      = authData.localId;
-
-    // Enviar email de verificación
-    await restSendVerification(idToken);
-
-    // Guardar en Firestore
-    const trialEnd = new Date(Date.now()+7*24*60*60*1000).toISOString();
-    await fsSet(USERS_COL, uid, {
-      uid, nombre, email, rol, status:'trial',
-      trialEnd, emailVerified:false,
-      createdAt: new Date().toISOString(), isAdmin:false
-    }, idToken);
-
-    // Mostrar pantalla de verificación
-    const ev = document.getElementById('verify-email-shown');
-    if(ev) ev.textContent = email;
+    const d=await restRegister(email,pass);
+    await restSendVerification(d.idToken);
+    const trialEnd=new Date(Date.now()+7*24*60*60*1000).toISOString();
+    await fsSet(USERS_COL,d.localId,{uid:d.localId,nombre,email,rol,status:'trial',trialEnd,emailVerified:false,createdAt:new Date().toISOString(),isAdmin:false},d.idToken);
+    const ev=document.getElementById('verify-email-shown');if(ev)ev.textContent=email;
     showScreen('verify-screen');
-
   } catch(e){
-    const msgs = {
-      'auth/email_exists':   'Ese correo ya está registrado.',
-      'auth/invalid_email':  'Correo inválido.',
-      'auth/weak_password':  'Contraseña muy débil (mínimo 6 caracteres).',
-    };
-    showLpMsg('lp-reg-msg','error', msgs[e.code]||e.message);
+    const msgs={'EMAIL_EXISTS':'Ese correo ya está registrado.','INVALID_EMAIL':'Correo inválido.','WEAK_PASSWORD : Password should be at least 6 characters':'Contraseña mínimo 6 caracteres.'};
+    showLpMsg('lp-reg-msg','error',msgs[e.code]||e.message||'Error al registrar');
   }
   if(btn){btn.disabled=false;btn.textContent='Crear cuenta y verificar ✉️';}
 }
 
-
 async function reenviarVerificacion(){
   try{
     const email=document.getElementById('li-user')?.value.trim()||document.getElementById('reg-email')?.value.trim();
-    const pass=document.getElementById('li-pass')?.value.trim()||document.getElementById('reg-pass')?.value.trim();
-    if(email&&pass){
-      const authData = await restLogin(email, pass);
-      await restSendVerification(authData.idToken);
-    }
+    const pass=document.getElementById('li-pass')?.value||document.getElementById('reg-pass')?.value;
+    if(email&&pass){const d=await restLogin(email,pass);await restSendVerification(d.idToken);}
     showToast('📧 Correo de verificación reenviado','success');
-  }catch(e){showToast('Error al reenviar: '+e.message,'error');}
+  }catch(e){showToast('Error: '+e.message,'error');}
 }
+function showTrialExpired(){showScreen('trial-screen');}
 
-function showTrialExpired(){ showScreen('trial-screen'); }
-
-// ════════════════════════════════════════════════════════
-//  LOGIN — CORREGIDO con mejor manejo de errores
-// ════════════════════════════════════════════════════════
-async function doLogin(){
-  const email = document.getElementById('li-user').value.trim();
-  const pass  = document.getElementById('li-pass').value;
-  if(!email||!pass){showLpMsg('lp-login-msg','error','Completa correo y contraseña.');return;}
-
-  const btn = document.getElementById('btn-login');
-  if(btn){btn.disabled=true;btn.textContent='Entrando...';}
-
-  const loginTimer = setTimeout(()=>{
-    showLpMsg('lp-login-msg','error','Tiempo de espera agotado. Verifica tu internet e intenta de nuevo.');
-    if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
-  }, 12000);
-
-  try {
-    // 1 — Login via REST (funciona en cualquier celular)
-    const authData = await restLogin(email, pass);
-    const idToken = authData.idToken;
-    const uid     = authData.localId;
-
-    // 2 — Verificar email
-    const userInfo = await restGetUserInfo(idToken);
-    if(!userInfo.emailVerified){
-      clearTimeout(loginTimer);
-      showLpMsg('lp-login-msg','error','Verifica tu correo antes de entrar. Revisa también la carpeta SPAM.');
-      if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
-      return;
-    }
-
-    // 3 — Guardar token en memoria
-    setToken(idToken, uid);
-
-    // 4 — Leer datos de Firestore
-    let userData = await fsGet(USERS_COL, uid, idToken).catch(()=>null);
-
-    // 5 — Si no existe, crear
-    if(!userData){
-      userData = {
-        uid, nombre: email.split('@')[0], email,
-        rol: 'Optometrista', status: 'trial',
-        trialEnd: new Date(Date.now()+7*24*60*60*1000).toISOString(),
-        emailVerified: true, createdAt: new Date().toISOString(), isAdmin: false
-      };
-      fsSet(USERS_COL, uid, userData, idToken).catch(()=>{});
-    }
-
-    // 6 — Verificar status
-    if(userData.status==='denied'){
-      clearTimeout(loginTimer);
-      showLpMsg('lp-login-msg','error','Tu acceso fue denegado. Contacta al administrador.');
-      setToken(null,null);
-      if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
-      return;
-    }
-
-    if(userData.status==='trial' && userData.trialEnd){
-      if(new Date() > new Date(userData.trialEnd)){
-        clearTimeout(loginTimer);
-        fsUpdateDoc(USERS_COL, uid, {status:'expired'}, idToken).catch(()=>{});
-        showTrialExpired();
-        setToken(null,null);
-        if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
-        return;
-      }
-    }
-
-    if(userData.status==='expired'){
-      clearTimeout(loginTimer);
-      showLpMsg('lp-login-msg','error','Tu periodo de prueba expiró. Contacta al administrador.');
-      setToken(null,null);
-      if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
-      return;
-    }
-
-    // 7 — ENTRAR
-    clearTimeout(loginTimer);
-    currentUser    = {uid, email};
-    currentUserDoc = userData;
-    fsUpdateDoc(USERS_COL, uid, {emailVerified:true}, idToken).catch(()=>{});
-    entrarSistema(userData);
-
-  } catch(e){
-    clearTimeout(loginTimer);
-    const msgs = {
-      'auth/email_not_found':      'No existe una cuenta con ese correo.',
-      'auth/invalid_password':     'Contraseña incorrecta.',
-      'auth/invalid_email':        'Correo inválido.',
-      'auth/too_many_attempts_try_later': 'Demasiados intentos. Espera unos minutos.',
-      'auth/user_disabled':        'Esta cuenta fue deshabilitada.',
-    };
-    showLpMsg('lp-login-msg','error', msgs[e.code]||('Error: '+(e.message||'Sin conexión. Verifica tu internet.')));
-    playErrorSound();
-    if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
-  }
-}
-
-
-async function reenviarVerificacion(){
-  try{
-    const email=document.getElementById('li-user')?.value.trim()||document.getElementById('reg-email')?.value.trim();
-    const pass=document.getElementById('li-pass')?.value.trim()||document.getElementById('reg-pass')?.value.trim();
-    if(email&&pass){
-      const authData = await restLogin(email, pass);
-      await restSendVerification(authData.idToken);
-    }
-    showToast('📧 Correo de verificación reenviado','success');
-  }catch(e){showToast('Error al reenviar: '+e.message,'error');}
-}
-
-function showTrialExpired(){ showScreen('trial-screen'); }
-
-// ════════════════════════════════════════════════════════
-//  LOGIN — CORREGIDO con mejor manejo de errores
-// ════════════════════════════════════════════════════════
-async function doLogin(){
-  const email = document.getElementById('li-user').value.trim();
-  const pass  = document.getElementById('li-pass').value;
-  if(!email||!pass){showLpMsg('lp-login-msg','error','Completa correo y contraseña.');return;}
-
-  const btn = document.getElementById('btn-login');
-  if(btn){btn.disabled=true;btn.textContent='Entrando...';}
-
-  // Timeout global de 10 segundos para todo el proceso
-  const loginTimeout = setTimeout(()=>{
-    showLpMsg('lp-login-msg','error','La conexión tardó demasiado. Verifica tu internet e intenta de nuevo.');
-    if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
-  }, 10000);
-
-  try {
-    // Auth con timeout de 8 segundos
-    const authPromise = auth.signInWithEmailAndPassword(email, pass);
-    const authTimeout = new Promise((_,reject) => setTimeout(()=>reject(new Error('auth-timeout')), 8000));
-    const cred = await Promise.race([authPromise, authTimeout]);
-
-    // Email verificado?
-    if(!cred.user.emailVerified){
-      clearTimeout(loginTimeout);
-      showLpMsg('lp-login-msg','error','Verifica tu correo antes de entrar. Revisa también la carpeta SPAM.');
-      await auth.signOut();
-      if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
-      return;
-    }
-
-    // Leer Firestore con timeout de 3 segundos
-    let userData = null;
-    try {
-      const fsPromise = db.collection(USERS_COL).doc(cred.user.uid).get();
-      const fsTimeout = new Promise((_,reject) => setTimeout(()=>reject(new Error('fs-timeout')), 3000));
-      const snap = await Promise.race([fsPromise, fsTimeout]);
-      if(snap && snap.exists) userData = snap.data();
-    } catch(e){ userData = null; }
-
-    // Si no hay doc, crear básico
-    if(!userData){
-      userData = {
-        uid: cred.user.uid,
-        nombre: email.split('@')[0],
-        email: email,
-        rol: 'Optometrista',
-        status: 'trial',
-        trialEnd: new Date(Date.now()+7*24*60*60*1000).toISOString(),
-        emailVerified: true,
-        createdAt: new Date().toISOString()
-      };
-      db.collection(USERS_COL).doc(cred.user.uid).set(userData).catch(()=>{});
-    }
-
-    // Verificar status
-    if(userData.status==='denied'){
-      clearTimeout(loginTimeout);
-      showLpMsg('lp-login-msg','error','Tu acceso fue denegado. Contacta al administrador.');
-      await auth.signOut();
-      if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
-      return;
-    }
-
-    if(userData.status==='trial' && userData.trialEnd){
-      if(new Date() > new Date(userData.trialEnd)){
-        clearTimeout(loginTimeout);
-        db.collection(USERS_COL).doc(cred.user.uid).update({status:'expired'}).catch(()=>{});
-        showTrialExpired();
-        await auth.signOut();
-        if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
-        return;
-      }
-    }
-
-    // ENTRAR
-    clearTimeout(loginTimeout);
-    currentUser = cred.user;
-    currentUserDoc = userData;
-    entrarSistema(userData);
-
-  } catch(e){
-    clearTimeout(loginTimeout);
-    const msgs = {
-      'auth/user-not-found':         'No existe una cuenta con ese correo.',
-      'auth/wrong-password':         'Contraseña incorrecta.',
-      'auth/invalid-email':          'Correo inválido.',
-      'auth/too-many-requests':      'Demasiados intentos. Espera unos minutos.',
-      'auth/invalid-credential':     'Correo o contraseña incorrectos.',
-      'auth/network-request-failed': 'Sin conexión a internet.',
-    };
-    const msg = e.message === 'auth-timeout'
-      ? 'La autenticación tardó demasiado. Verifica tu internet.'
-      : (msgs[e.code] || ('Error: ' + e.message));
-    showLpMsg('lp-login-msg','error', msg);
-    playErrorSound();
-    if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
-  }
-}
-
-
-async function reenviarVerificacion(){
-  try{
-    const email=document.getElementById('li-user')?.value.trim()||document.getElementById('reg-email')?.value.trim();
-    const pass=document.getElementById('li-pass')?.value.trim()||document.getElementById('reg-pass')?.value.trim();
-    if(email&&pass){
-      const authData = await restLogin(email, pass);
-      await restSendVerification(authData.idToken);
-    }
-    showToast('📧 Correo de verificación reenviado','success');
-  }catch(e){showToast('Error al reenviar: '+e.message,'error');}
-}
-
-function showTrialExpired(){ showScreen('trial-screen'); }
-
-// ════════════════════════════════════════════════════════
-//  LOGIN — CORREGIDO con mejor manejo de errores
-// ════════════════════════════════════════════════════════
-async function doLogin(){
-  const email = document.getElementById('li-user').value.trim();
-  const pass  = document.getElementById('li-pass').value;
-  if(!email||!pass){showLpMsg('lp-login-msg','error','Completa correo y contraseña.');return;}
-
-  const btn = document.getElementById('btn-login');
-  if(btn){btn.disabled=true;btn.textContent='Entrando...';}
-
-  try {
-    // Paso 1: Autenticar
-    const cred = await auth.signInWithEmailAndPassword(email, pass);
-
-    // Paso 2: Verificar email
-    if(!cred.user.emailVerified){
-      showLpMsg('lp-login-msg','error','Verifica tu correo antes de entrar. Revisa también el SPAM.');
-      await auth.signOut();
-      if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
-      return;
-    }
-
-    // Paso 3: Intentar leer Firestore con timeout de 4 segundos
-    let userData = null;
-    try {
-      const firestorePromise = db.collection(USERS_COL).doc(cred.user.uid).get();
-      const timeoutPromise = new Promise((_,reject) => setTimeout(()=>reject(new Error('timeout')), 4000));
-      const snap = await Promise.race([firestorePromise, timeoutPromise]);
-      if(snap.exists){
-        userData = snap.data();
-      }
-    } catch(e){
-      // Firestore falló o tardó demasiado — continuar sin él
-      console.warn('Firestore timeout/error:', e.message);
-    }
-
-    // Paso 4: Si no hay userData, crear uno básico
-    if(!userData){
-      userData = {
-        uid: cred.user.uid,
-        nombre: email.split('@')[0],
-        email: email,
-        rol: 'Optometrista',
-        status: 'trial',
-        trialEnd: new Date(Date.now() + 7*24*60*60*1000).toISOString(),
-        emailVerified: true,
-        createdAt: new Date().toISOString()
-      };
-      // Intentar guardar en background (sin esperar)
-      db.collection(USERS_COL).doc(cred.user.uid).set(userData).catch(()=>{});
-    }
-
-    // Paso 5: Verificar status
-    if(userData.status==='denied'){
-      showLpMsg('lp-login-msg','error','Tu acceso fue denegado. Contacta al administrador.');
-      await auth.signOut();
-      if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
-      return;
-    }
-
-    // Paso 6: Verificar trial expirado
-    if(userData.status==='trial' && userData.trialEnd){
-      if(new Date() > new Date(userData.trialEnd)){
-        db.collection(USERS_COL).doc(cred.user.uid).update({status:'expired'}).catch(()=>{});
-        showTrialExpired();
-        await auth.signOut();
-        if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
-        return;
-      }
-    }
-
-    // Paso 7: ENTRAR
-    currentUser = cred.user;
-    currentUserDoc = userData;
-    entrarSistema(userData);
-
-  } catch(e){
-    const msgs = {
-      'auth/user-not-found':     'No existe una cuenta con ese correo.',
-      'auth/wrong-password':     'Contraseña incorrecta.',
-      'auth/invalid-email':      'Correo inválido.',
-      'auth/too-many-requests':  'Demasiados intentos. Espera unos minutos.',
-      'auth/invalid-credential': 'Correo o contraseña incorrectos.',
-      'auth/network-request-failed': 'Sin conexión. Verifica tu internet.'
-    };
-    showLpMsg('lp-login-msg','error', msgs[e.code]||('Error: '+e.message));
-    playErrorSound();
-    if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
-  }
-}
-
-
-async function reenviarVerificacion(){
-  try{
-    const email=document.getElementById('li-user')?.value.trim()||document.getElementById('reg-email')?.value.trim();
-    const pass=document.getElementById('li-pass')?.value.trim()||document.getElementById('reg-pass')?.value.trim();
-    if(email&&pass){
-      const authData = await restLogin(email, pass);
-      await restSendVerification(authData.idToken);
-    }
-    showToast('📧 Correo de verificación reenviado','success');
-  }catch(e){showToast('Error al reenviar: '+e.message,'error');}
-}
-
-function showTrialExpired(){ showScreen('trial-screen'); }
-
-// ════════════════════════════════════════════════════════
-//  LOGIN — CORREGIDO con mejor manejo de errores
-// ════════════════════════════════════════════════════════
-async function doLogin(){
-  const email = document.getElementById('li-user').value.trim();
-  const pass  = document.getElementById('li-pass').value;
-  if(!email||!pass){showLpMsg('lp-login-msg','error','Completa correo y contraseña.');return;}
-
-  const btn = document.getElementById('btn-login');
-  if(btn){btn.disabled=true;btn.textContent='Entrando...';}
-
-  try {
-    // 1 — Autenticar con Firebase Auth
-    const cred = await auth.signInWithEmailAndPassword(email, pass);
-
-    // 2 — Verificar email
-    if(!cred.user.emailVerified){
-      showLpMsg('lp-login-msg','error','⚠️ Debes verificar tu correo antes de entrar. Revisa tu bandeja de entrada y también la carpeta SPAM.');
-      const ev = document.getElementById('verify-email-shown');
-      if(ev) ev.textContent = email;
-      await auth.signOut();
-      if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
-      return;
-    }
-
-    // 3 — Esperar a que Firestore reconozca la sesión (móvil necesita más tiempo)
-    await new Promise(resolve => setTimeout(resolve, 1500));
-
-    // 4 — Leer documento del usuario en Firestore (con reintentos)
-    let snap;
-    let firestoreOk = false;
-    for(let intento = 1; intento <= 3; intento++){
-      try {
-        snap = await db.collection(USERS_COL).doc(cred.user.uid).get();
-        firestoreOk = true;
-        break;
-      } catch(firestoreErr) {
-        if(intento < 3){
-          // Esperar y reintentar
-          await new Promise(resolve => setTimeout(resolve, 1000 * intento));
-        } else {
-          showLpMsg('lp-login-msg','error','Error de conexión con el servidor. Verifica tu internet e intenta de nuevo.');
-          await auth.signOut();
-          if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
-          return;
-        }
-      }
-    }
-
-    // 5 — Si no existe el doc, crearlo automáticamente
-    if(!snap.exists){
-      const trialEnd = new Date();
-      trialEnd.setDate(trialEnd.getDate()+7);
-      const newDoc = {
-        uid: cred.user.uid,
-        nombre: cred.user.displayName || email.split('@')[0],
-        email: email,
-        rol: 'Optometrista',
-        status: 'trial',
-        trialEnd: trialEnd.toISOString(),
-        emailVerified: true,
-        createdAt: new Date().toISOString(),
-        isAdmin: false
-      };
-      try {
-        await db.collection(USERS_COL).doc(cred.user.uid).set(newDoc);
-        snap = { exists: true, data: () => newDoc };
-      } catch(e) {
-        // Entrar aunque no se pueda guardar el doc
-        snap = { exists: true, data: () => newDoc };
-      }
-    }
-
-    const userData = snap.data();
-
-    // 6 — Verificar status
-    if(userData.status==='denied'){
-      showLpMsg('lp-login-msg','error','Tu acceso fue denegado. Contacta al administrador.');
-      await auth.signOut();
-      if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
-      return;
-    }
-
-    if(userData.status==='expired'){
-      showLpMsg('lp-login-msg','error','Tu periodo de prueba expiró. Contacta al administrador.');
-      await auth.signOut();
-      if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
-      return;
-    }
-
-    // 7 — Verificar trial expirado
-    if(userData.status==='trial' && userData.trialEnd){
-      const trialEnd = new Date(userData.trialEnd);
-      if(new Date() > trialEnd){
-        await db.collection(USERS_COL).doc(cred.user.uid).update({status:'expired'}).catch(()=>{});
-        showTrialExpired();
-        await auth.signOut();
-        if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
-        return;
-      }
-    }
-
-    // 8 — Actualizar emailVerified
-    db.collection(USERS_COL).doc(cred.user.uid).update({emailVerified:true}).catch(()=>{});
-
-    // 9 — ENTRAR AL SISTEMA
-    currentUser    = cred.user;
-    currentUserDoc = userData;
-    entrarSistema(userData);
-
-  } catch(e){
-    const msgs = {
-      'auth/user-not-found':     'No existe una cuenta con ese correo.',
-      'auth/wrong-password':     'Contraseña incorrecta.',
-      'auth/invalid-email':      'Correo inválido.',
-      'auth/too-many-requests':  'Demasiados intentos. Espera unos minutos.',
-      'auth/invalid-credential': 'Correo o contraseña incorrectos.',
-      'auth/network-request-failed': 'Sin conexión a internet. Verifica tu red.'
-    };
-    showLpMsg('lp-login-msg','error', msgs[e.code]||('Error: '+e.message));
-    playErrorSound();
-    if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
-  }
-}
-
-// ════════════════════════════════════════════════════════
-//  ENTRAR AL SISTEMA
-// ════════════════════════════════════════════════════════
-function entrarSistema(userData){
+// ════ ENTRAR AL SISTEMA ════
+function entrarSistema(ud){
   if(carTimer)clearInterval(carTimer);
   showScreen('app');
-  const nc=document.getElementById('user-name-chip');
-  const av=document.getElementById('user-avatar');
-  if(nc)nc.textContent=userData.nombre?.split(' ')[0]||'Usuario';
-  if(av)av.textContent=(userData.nombre||'U').charAt(0).toUpperCase();
-  if(userData.status==='trial'){
-    const dias=Math.ceil((new Date(userData.trialEnd)-new Date())/864e5);
-    const chip=document.getElementById('trial-badge');
-    if(chip){chip.style.display='flex';chip.textContent=`⏳ Prueba: ${dias}d`;}
-  }
-  applyTheme(); loadConfig(); loadConfigUI(); loadData(); renderDashboard();
+  const nc=document.getElementById('user-name-chip');if(nc)nc.textContent=ud.nombre?.split(' ')[0]||'Usuario';
+  const av=document.getElementById('user-avatar');if(av)av.textContent=(ud.nombre||'U').charAt(0).toUpperCase();
+  if(ud.status==='trial'){const dias=Math.ceil((new Date(ud.trialEnd)-new Date())/864e5);const chip=document.getElementById('trial-badge');if(chip){chip.style.display='flex';chip.textContent=`⏳ Prueba: ${dias}d`;}}
+  applyTheme();loadConfig();loadConfigUI();loadData();renderDashboard();
 }
-
 function cerrarSesion(){
-  setToken(null,null);
-  currentUser=null;currentUserDoc=null;pacientes=[];config={};
+  setToken(null,null);currentUser=null;currentUserDoc=null;pacientes=[];config={};
   showScreen('login-screen');
-  const lu=document.getElementById('li-user');
-  const lp=document.getElementById('li-pass');
-  const lm=document.getElementById('lp-login-msg');
-  if(lu)lu.value='';if(lp)lp.value='';
-  if(lm)lm.className='lp-msg';
+  const lu=document.getElementById('li-user');const lp=document.getElementById('li-pass');const lm=document.getElementById('lp-login-msg');
+  if(lu)lu.value='';if(lp)lp.value='';if(lm)lm.className='lp-msg';
   buildCarousel();buildParticles();
 }
 
-// ════════════════════════════════════════════════════════
-//  FIRESTORE — PACIENTES
-// ════════════════════════════════════════════════════════
-let pacientes=[], config={}, editandoId=null, pagoTargetId=null,
-    ultimoId=null, ordenAsc=false, expId=null;
+// ════ PACIENTES ════
+let pacientes=[],config={},editandoId=null,pagoTargetId=null,ultimoId=null,ordenAsc=false,expId=null;
 
 async function loadData(){
-  if(!currentUser) return;
-  try {
-    const uid = currentUser.uid || getUid();
-    const token = getToken();
-    const results = await fsQuery(PACIENTES_COL, 'uid', uid, token);
-    pacientes = results || [];
-    renderDashboard();
-  } catch(e){ console.error('loadData:',e); pacientes=[]; renderDashboard(); }
+  if(!currentUser)return;
+  try{
+    const results=await fsQuery(PACIENTES_COL,'uid',currentUser.uid,getToken());
+    pacientes=results||[];renderDashboard();
+  }catch(e){console.error('loadData:',e);pacientes=[];renderDashboard();}
 }
-
 async function savePatient(p){
-  if(!currentUser) return;
-  try {
-    const token = getToken();
-    const uid   = currentUser.uid || getUid();
-    const data  = {...p, uid, updatedAt: new Date().toISOString()};
-    if(editandoId){
-      await fsSet(PACIENTES_COL, editandoId, data, token);
-    } else {
-      const newId = await fsAddDoc(PACIENTES_COL, {...data, createdAt: new Date().toISOString()}, token);
-      p.id = newId;
-    }
-  } catch(e){ console.error('savePatient:',e); showToast('❌ Error al guardar: '+e.message,'error'); }
+  if(!currentUser)return;
+  try{
+    const data={...p,uid:currentUser.uid,updatedAt:new Date().toISOString()};
+    if(editandoId){await fsSet(PACIENTES_COL,editandoId,data,getToken());}
+    else{const id=await fsAdd(PACIENTES_COL,{...data,createdAt:new Date().toISOString()},getToken());p.id=id;}
+  }catch(e){console.error('savePatient:',e);showToast('❌ Error al guardar','error');}
 }
-
 async function deletePatient(id){
-  try { await fsDeleteDoc(PACIENTES_COL, id, getToken()); } catch(e){ console.error(e); }
+  try{await fsDelete(PACIENTES_COL,id,getToken());}catch(e){console.error(e);}
 }
 
-// ════════════════════════════════════════════════════════
-//  CONFIG
-// ════════════════════════════════════════════════════════
+// ════ CONFIG ════
 const CFG_KEY='bitacora_config_v1';
 function loadConfig(){try{config=JSON.parse(localStorage.getItem(CFG_KEY)||'{}');}catch(e){config={};}}
 function saveConfig(){
-  ['nombre','tel','wa','email','domicilio','slogan','redes'].forEach(k=>{
-    const el=document.getElementById('cfg-'+k);if(el)config[k]=el.value.trim();
-  });
+  ['nombre','tel','wa','email','domicilio','slogan','redes'].forEach(k=>{const el=document.getElementById('cfg-'+k);if(el)config[k]=el.value.trim();});
   const cbc=document.getElementById('cfg-wa-directo');if(cbc)config.waDirecto=cbc.checked;
   localStorage.setItem(CFG_KEY,JSON.stringify(config));
-  const n=config.nombre||'Bitácora Optométrica';
-  const hn=document.getElementById('header-clinic-name');
-  const hs=document.getElementById('header-clinic-sub');
-  if(hn)hn.textContent=n;
-  if(hs)hs.textContent=config.slogan||'Sistema de gestión clínica';
+  const hn=document.getElementById('header-clinic-name');const hs=document.getElementById('header-clinic-sub');
+  if(hn)hn.textContent=config.nombre||'Bitácora Optométrica';if(hs)hs.textContent=config.slogan||'Sistema de gestión clínica';
 }
 function loadConfigUI(){
   loadConfig();
-  ['nombre','tel','wa','email','domicilio','slogan','redes'].forEach(k=>{
-    const el=document.getElementById('cfg-'+k);if(el&&config[k])el.value=config[k];
-  });
+  ['nombre','tel','wa','email','domicilio','slogan','redes'].forEach(k=>{const el=document.getElementById('cfg-'+k);if(el&&config[k])el.value=config[k];});
   const cbd=document.getElementById('cfg-wa-directo');if(cbd)cbd.checked=!!config.waDirecto;
-  if(config.logo){
-    const img=document.getElementById('logo-preview');
-    if(img){img.src=config.logo;img.style.display='block';}
-    const br=document.getElementById('btn-remove-logo');if(br)br.style.display='inline-flex';
-    const hw=document.getElementById('header-logo-wrap');
-    if(hw)hw.innerHTML=`<img src="${config.logo}" style="width:100%;height:100%;object-fit:cover;border-radius:10px">`;
-  }
-  const hn=document.getElementById('header-clinic-name');
-  const hs=document.getElementById('header-clinic-sub');
-  if(config.nombre&&hn)hn.textContent=config.nombre;
-  if(config.slogan&&hs)hs.textContent=config.slogan;
+  if(config.logo){const img=document.getElementById('logo-preview');if(img){img.src=config.logo;img.style.display='block';}const br=document.getElementById('btn-remove-logo');if(br)br.style.display='inline-flex';const hw=document.getElementById('header-logo-wrap');if(hw)hw.innerHTML=`<img src="${config.logo}" style="width:100%;height:100%;object-fit:cover;border-radius:10px">`;}
+  const hn=document.getElementById('header-clinic-name');const hs=document.getElementById('header-clinic-sub');
+  if(config.nombre&&hn)hn.textContent=config.nombre;if(config.slogan&&hs)hs.textContent=config.slogan;
 }
 function uploadLogo(e){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{config.logo=ev.target.result;localStorage.setItem(CFG_KEY,JSON.stringify(config));const img=document.getElementById('logo-preview');if(img){img.src=config.logo;img.style.display='block';}const br=document.getElementById('btn-remove-logo');if(br)br.style.display='inline-flex';const hw=document.getElementById('header-logo-wrap');if(hw)hw.innerHTML=`<img src="${config.logo}" style="width:100%;height:100%;object-fit:cover;border-radius:10px">`;showToast('✅ Logo cargado','success');};r.readAsDataURL(f);}
 function removeLogo(){config.logo=null;localStorage.setItem(CFG_KEY,JSON.stringify(config));const lp=document.getElementById('logo-preview');if(lp)lp.style.display='none';const br=document.getElementById('btn-remove-logo');if(br)br.style.display='none';const li=document.getElementById('logo-input');if(li)li.value='';const hw=document.getElementById('header-logo-wrap');if(hw)hw.innerHTML='<span>👁️</span>';}
 
-// ════════════════════════════════════════════════════════
-//  MATERIAL
-// ════════════════════════════════════════════════════════
-const MAT_INFO={'CR-39 / Orgánico 1.50':'Ideal para graduaciones bajas (hasta ±2.00). Excelente óptica y precio accesible.','Mid-index 1.53 (Trivex)':'Ligero, resistente a impactos. Ideal para niños y rimless. UV integrado.','Mid-index 1.56':'Más delgado que CR-39. Buena relación precio-grosor.','Hi-index 1.60':'Para graduaciones medias a altas (±2.25 a ±4.00). Combinar con AR.','Hi-index 1.67':'Para graduaciones altas (±4.25 a ±6.00). Muy delgado.','Hi-index 1.74':'Ultra delgado. Para graduaciones muy altas (>±6.00). AR obligatorio.','Policarbonato 1.59':'Alta resistencia a impactos. UV integrado. Para niños y deportistas.','Trivex 1.53':'Resistente y ligero. Mejor nitidez que policarbonato. Ideal rimless.','Conoesfera asférica 1.60':'Asférico. Elimina distorsiones. Excelente para astigmatismos.','Conoesfera asférica 1.67':'Asférico alto índice. Para astigmatismos altos.','Vidrio mineral 1.70':'Alta resistencia a rayones. Más pesado. Para casos específicos.'};
+// ════ MATERIAL ════
+const MAT_INFO={'CR-39 / Orgánico 1.50':'Ideal para graduaciones bajas (hasta ±2.00).','Mid-index 1.53 (Trivex)':'Ligero, resistente a impactos.','Mid-index 1.56':'Más delgado que CR-39.','Hi-index 1.60':'Para graduaciones medias a altas.','Hi-index 1.67':'Para graduaciones altas. Muy delgado.','Hi-index 1.74':'Ultra delgado para graduaciones muy altas.','Policarbonato 1.59':'Alta resistencia a impactos.','Trivex 1.53':'Resistente y ligero.','Conoesfera asférica 1.60':'Asférico, elimina distorsiones.','Conoesfera asférica 1.67':'Asférico alto índice.','Vidrio mineral 1.70':'Alta resistencia a rayones.'};
 function onMaterialChange(){const v=document.getElementById('f-material').value;const b=document.getElementById('mat-rec-box');if(!b)return;if(!v||!MAT_INFO[v]){b.className='mat-rec-box';return;}b.className='mat-rec-box show';b.innerHTML=`<strong style="color:var(--primary)">ℹ️ ${v}</strong><br><span style="font-size:.78rem">${MAT_INFO[v]}</span>`;}
 
-// ════════════════════════════════════════════════════════
-//  VIEWS
-// ════════════════════════════════════════════════════════
+// ════ VIEWS ════
 function showView(v){
   document.querySelectorAll('.view').forEach(el=>el.classList.remove('active'));
   document.querySelectorAll('.nav-btn').forEach(el=>el.classList.remove('active'));
-  const vEl=document.getElementById('view-'+v);
-  if(vEl)vEl.classList.add('active');
+  const vEl=document.getElementById('view-'+v);if(vEl)vEl.classList.add('active');
   const idx=['dashboard','nuevo','lista','seguimiento','config'].indexOf(v);
   document.querySelectorAll('.nav-btn')[idx]?.classList.add('active');
   if(v==='dashboard')renderDashboard();
@@ -1332,12 +735,9 @@ function showView(v){
   if(v==='config')loadConfigUI();
 }
 
-// ════════════════════════════════════════════════════════
-//  UTILS
-// ════════════════════════════════════════════════════════
+// ════ UTILS ════
 const today=()=>new Date().toISOString().split('T')[0];
-const fDate=document.getElementById('f-fecha');
-if(fDate)fDate.value=today();
+const fDate=document.getElementById('f-fecha');if(fDate)fDate.value=today();
 const fmt=n=>'$'+(parseFloat(n)||0).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2});
 const diasDesde=f=>Math.floor((new Date()-new Date(f+'T12:00:00'))/864e5);
 const formatDate=d=>{if(!d)return'—';const[y,m,dd]=d.split('-');return`${dd}/${m}/${y}`;};
@@ -1347,72 +747,71 @@ const sortByFecha=list=>[...list].sort((a,b)=>ordenAsc?new Date(a.fecha+'T12:00:
 
 function calcAdeudo(){
   const c=parseFloat(document.getElementById('f-costo')?.value)||0,a=parseFloat(document.getElementById('f-anticipo')?.value)||0,d=parseFloat(document.getElementById('f-descuento')?.value)||0,x=Math.max(0,c-a-d);
-  const dc=document.getElementById('disp-costo');const da=document.getElementById('disp-anticipo');const dd=document.getElementById('disp-descuento');const de=document.getElementById('disp-adeudo');
-  if(dc)dc.textContent=fmt(c);if(da)da.textContent=fmt(a);if(dd)dd.textContent=fmt(d);
+  const dc=document.getElementById('disp-costo');const da=document.getElementById('disp-anticipo');const dd2=document.getElementById('disp-descuento');const de=document.getElementById('disp-adeudo');
+  if(dc)dc.textContent=fmt(c);if(da)da.textContent=fmt(a);if(dd2)dd2.textContent=fmt(d);
   if(de){if(x===0&&c>0){de.textContent='PAGADO ✓';de.className='adeudo-amount green';}else{de.textContent=fmt(x);de.className='adeudo-amount'+(x>0?' red':'');}}
 }
 function showToast(msg,type=''){const t=document.getElementById('toast');if(!t)return;t.textContent=msg;t.className='toast show '+type;setTimeout(()=>t.className='toast',3500);}
 function showAlert(msg,type){const fa=document.getElementById('form-alert');if(fa)fa.innerHTML=`<div class="alert-banner ${type}">${msg}</div>`;window.scrollTo(0,0);}
 
-// ════════════════════════════════════════════════════════
-//  GUARDAR PACIENTE
-// ════════════════════════════════════════════════════════
+// ════ GUARDAR PACIENTE ════
 async function guardarPaciente(){
-  const nombre=document.getElementById('f-nombre').value.trim(),
-        telefono=document.getElementById('f-telefono').value.trim(),
-        fecha=document.getElementById('f-fecha').value,
-        motivo=document.getElementById('f-motivo').value.trim();
+  const nombre=document.getElementById('f-nombre').value.trim(),telefono=document.getElementById('f-telefono').value.trim(),fecha=document.getElementById('f-fecha').value,motivo=document.getElementById('f-motivo').value.trim();
   if(!nombre){playErrorSound();showAlert('⚠️ El nombre es obligatorio.','red');return;}
   if(!telefono){playErrorSound();showAlert('⚠️ El teléfono es obligatorio.','red');return;}
   if(!fecha){playErrorSound();showAlert('⚠️ La fecha es obligatoria.','red');return;}
   if(!motivo){playErrorSound();showAlert('⚠️ El motivo es obligatorio.','red');return;}
   const costo=parseFloat(document.getElementById('f-costo').value)||0,anticipo=parseFloat(document.getElementById('f-anticipo').value)||0,descuento=parseFloat(document.getElementById('f-descuento').value)||0,adeudo=Math.max(0,costo-anticipo-descuento);
   const id=editandoId||Date.now().toString();
-  const p={id,nombre,telefono,fecha,edad:document.getElementById('f-edad').value,genero:document.getElementById('f-genero').value,ocupacion:document.getElementById('f-ocupacion').value,motivo,antecPersonales:getChecked('antec-personales'),antecPersonalesOtros:document.getElementById('f-antec-otros').value,antecFamiliares:getChecked('antec-familiares'),antecFamiliaresOtros:document.getElementById('f-antec-fam-otros').value,sintomas:getChecked('sintomas'),sintomaOtro:document.getElementById('f-sintoma-otro').value,av:{odLsc:document.getElementById('av-od-lsc').value,odLcc:document.getElementById('av-od-lcc').value,odCsc:document.getElementById('av-od-csc').value,odCcc:document.getElementById('av-od-ccc').value,oiLsc:document.getElementById('av-oi-lsc').value,oiLcc:document.getElementById('av-oi-lcc').value,oiCsc:document.getElementById('av-oi-csc').value,oiCcc:document.getElementById('av-oi-ccc').value,aoL:document.getElementById('av-ao-l').value,aoC:document.getElementById('av-ao-c').value},retinoscopiaOD:{esf:document.getElementById('ret-od-esf').value,cil:document.getElementById('ret-od-cil').value,eje:document.getElementById('ret-od-eje').value,add:document.getElementById('ret-od-add').value,av:document.getElementById('ret-od-av').value},retinoscopiaOI:{esf:document.getElementById('ret-oi-esf').value,cil:document.getElementById('ret-oi-cil').value,eje:document.getElementById('ret-oi-eje').value,add:document.getElementById('ret-oi-add').value,av:document.getElementById('ret-oi-av').value},subjetivoOD:{esf:document.getElementById('sub-od-esf').value,cil:document.getElementById('sub-od-cil').value,eje:document.getElementById('sub-od-eje').value,add:document.getElementById('sub-od-add').value,pri:document.getElementById('sub-od-pri').value,av:document.getElementById('sub-od-av').value},subjetivoOI:{esf:document.getElementById('sub-oi-esf').value,cil:document.getElementById('sub-oi-cil').value,eje:document.getElementById('sub-oi-eje').value,add:document.getElementById('sub-oi-add').value,pri:document.getElementById('sub-oi-pri').value,av:document.getElementById('sub-oi-av').value},recetaOD:{esf:document.getElementById('rec-od-esf').value,cil:document.getElementById('rec-od-cil').value,eje:document.getElementById('rec-od-eje').value,add:document.getElementById('rec-od-add').value,pri:document.getElementById('rec-od-pri').value,av:document.getElementById('rec-od-av').value},recetaOI:{esf:document.getElementById('rec-oi-esf').value,cil:document.getElementById('rec-oi-cil').value,eje:document.getElementById('rec-oi-eje').value,add:document.getElementById('rec-oi-add').value,pri:document.getElementById('rec-oi-pri').value,av:document.getElementById('rec-oi-av').value},dip:document.getElementById('f-dip').value,altura:document.getElementById('f-altura').value,tipoLente:document.getElementById('f-tipo-lente').value,material:document.getElementById('f-material').value,tinte:document.getElementById('f-tinte').value,tratamientos:getChecked('tratamientos'),tratOtros:document.getElementById('f-trat-otros').value,exParpados:document.getElementById('ex-parpados').value,exPestanas:document.getElementById('ex-pestanas').value,exConjuntiva:document.getElementById('ex-conjuntiva').value,exEsclera:document.getElementById('ex-esclera').value,exCornea:document.getElementById('ex-cornea').value,exPupilas:document.getElementById('ex-pupilas').value,exMotilidad:document.getElementById('ex-motilidad').value,exObs:document.getElementById('ex-obs').value,pioOD:document.getElementById('pio-od').value,pioOI:document.getElementById('pio-oi').value,pioHora:document.getElementById('pio-hora').value,pioMetodo:document.getElementById('pio-metodo').value,obsClinnicas:document.getElementById('f-obs-clinicas').value,diagnostico:getChecked('diagnostico'),diagOtro:document.getElementById('f-diag-otro').value,conducta:getChecked('conducta'),conductaOtro:document.getElementById('f-conducta-otro').value,proximoControl:document.getElementById('f-proximo-control').value,costo,anticipo,descuento,adeudo,metodoPago:document.getElementById('f-metodo-pago').value,fechaPago:document.getElementById('f-fecha-pago').value,estadoPedido:document.getElementById('f-estado-pedido').value,notasPago:document.getElementById('f-notas-pago').value,abonos:editandoId?(pacientes.find(x=>x.id===editandoId)?.abonos||[]):[],};
+  const p={id,nombre,telefono,fecha,edad:document.getElementById('f-edad').value,genero:document.getElementById('f-genero').value,ocupacion:document.getElementById('f-ocupacion').value,motivo,
+    antecPersonales:getChecked('antec-personales'),antecPersonalesOtros:document.getElementById('f-antec-otros').value,
+    antecFamiliares:getChecked('antec-familiares'),antecFamiliaresOtros:document.getElementById('f-antec-fam-otros').value,
+    sintomas:getChecked('sintomas'),sintomaOtro:document.getElementById('f-sintoma-otro').value,
+    av:{odLsc:document.getElementById('av-od-lsc').value,odLcc:document.getElementById('av-od-lcc').value,odCsc:document.getElementById('av-od-csc').value,odCcc:document.getElementById('av-od-ccc').value,oiLsc:document.getElementById('av-oi-lsc').value,oiLcc:document.getElementById('av-oi-lcc').value,oiCsc:document.getElementById('av-oi-csc').value,oiCcc:document.getElementById('av-oi-ccc').value,aoL:document.getElementById('av-ao-l').value,aoC:document.getElementById('av-ao-c').value},
+    retinoscopiaOD:{esf:document.getElementById('ret-od-esf').value,cil:document.getElementById('ret-od-cil').value,eje:document.getElementById('ret-od-eje').value,add:document.getElementById('ret-od-add').value,av:document.getElementById('ret-od-av').value},
+    retinoscopiaOI:{esf:document.getElementById('ret-oi-esf').value,cil:document.getElementById('ret-oi-cil').value,eje:document.getElementById('ret-oi-eje').value,add:document.getElementById('ret-oi-add').value,av:document.getElementById('ret-oi-av').value},
+    subjetivoOD:{esf:document.getElementById('sub-od-esf').value,cil:document.getElementById('sub-od-cil').value,eje:document.getElementById('sub-od-eje').value,add:document.getElementById('sub-od-add').value,pri:document.getElementById('sub-od-pri').value,av:document.getElementById('sub-od-av').value},
+    subjetivoOI:{esf:document.getElementById('sub-oi-esf').value,cil:document.getElementById('sub-oi-cil').value,eje:document.getElementById('sub-oi-eje').value,add:document.getElementById('sub-oi-add').value,pri:document.getElementById('sub-oi-pri').value,av:document.getElementById('sub-oi-av').value},
+    recetaOD:{esf:document.getElementById('rec-od-esf').value,cil:document.getElementById('rec-od-cil').value,eje:document.getElementById('rec-od-eje').value,add:document.getElementById('rec-od-add').value,pri:document.getElementById('rec-od-pri').value,av:document.getElementById('rec-od-av').value},
+    recetaOI:{esf:document.getElementById('rec-oi-esf').value,cil:document.getElementById('rec-oi-cil').value,eje:document.getElementById('rec-oi-eje').value,add:document.getElementById('rec-oi-add').value,pri:document.getElementById('rec-oi-pri').value,av:document.getElementById('rec-oi-av').value},
+    dip:document.getElementById('f-dip').value,altura:document.getElementById('f-altura').value,
+    tipoLente:document.getElementById('f-tipo-lente').value,material:document.getElementById('f-material').value,tinte:document.getElementById('f-tinte').value,
+    tratamientos:getChecked('tratamientos'),tratOtros:document.getElementById('f-trat-otros').value,
+    exParpados:document.getElementById('ex-parpados').value,exPestanas:document.getElementById('ex-pestanas').value,exConjuntiva:document.getElementById('ex-conjuntiva').value,exEsclera:document.getElementById('ex-esclera').value,exCornea:document.getElementById('ex-cornea').value,exPupilas:document.getElementById('ex-pupilas').value,exMotilidad:document.getElementById('ex-motilidad').value,exObs:document.getElementById('ex-obs').value,
+    pioOD:document.getElementById('pio-od').value,pioOI:document.getElementById('pio-oi').value,pioHora:document.getElementById('pio-hora').value,pioMetodo:document.getElementById('pio-metodo').value,obsClinnicas:document.getElementById('f-obs-clinicas').value,
+    diagnostico:getChecked('diagnostico'),diagOtro:document.getElementById('f-diag-otro').value,
+    conducta:getChecked('conducta'),conductaOtro:document.getElementById('f-conducta-otro').value,proximoControl:document.getElementById('f-proximo-control').value,
+    costo,anticipo,descuento,adeudo,metodoPago:document.getElementById('f-metodo-pago').value,fechaPago:document.getElementById('f-fecha-pago').value,estadoPedido:document.getElementById('f-estado-pedido').value,notasPago:document.getElementById('f-notas-pago').value,
+    abonos:editandoId?(pacientes.find(x=>x.id===editandoId)?.abonos||[]):[],
+  };
   const esEd=!!editandoId;
-  const btnG=document.querySelector('[onclick="guardarPaciente()"]');
-  if(btnG){btnG.disabled=true;btnG.textContent='💾 Guardando...';}
+  const btnG=document.querySelector('[onclick="guardarPaciente()"]');if(btnG){btnG.disabled=true;btnG.textContent='💾 Guardando...';}
   await savePatient(p);
   if(editandoId){const idx=pacientes.findIndex(x=>x.id===editandoId);if(idx>=0)pacientes[idx]=p;editandoId=null;}
   else{pacientes.push(p);}
   ultimoId=p.id;
-  playSuccessSound();
-  setTimeout(()=>speak(esEd?`Expediente de ${nombre} actualizado.`:`Paciente ${nombre} registrado correctamente.`),600);
+  playSuccessSound();setTimeout(()=>speak(esEd?`Expediente de ${nombre} actualizado.`:`Paciente ${nombre} registrado correctamente.`),600);
   showToast(esEd?`✅ ${nombre} actualizado`:`✅ ${nombre} guardado`,'success');
   limpiarFormulario();showView('lista');
   if(btnG){btnG.disabled=false;btnG.textContent='💾 Guardar Paciente';}
 }
-
 function limpiarFormulario(){
   document.querySelectorAll('#view-nuevo input,#view-nuevo select,#view-nuevo textarea').forEach(el=>{if(el.type==='checkbox')el.checked=false;else if(el.type!=='button')el.value='';});
   const ff=document.getElementById('f-fecha');if(ff)ff.value=today();
   const mb=document.getElementById('mat-rec-box');if(mb)mb.className='mat-rec-box';
-  calcAdeudo();editandoId=null;
-  const fa=document.getElementById('form-alert');if(fa)fa.innerHTML='';
-  window.scrollTo(0,0);
+  calcAdeudo();editandoId=null;const fa=document.getElementById('form-alert');if(fa)fa.innerHTML='';window.scrollTo(0,0);
 }
 
-// ════════════════════════════════════════════════════════
-//  ANIMACIÓN FILAS
-// ════════════════════════════════════════════════════════
+// ════ ANIMACIÓN FILAS ════
 let scanTimers=[];
 function animarFilas(filas){
-  scanTimers.forEach(clearTimeout);scanTimers=[];
-  const sc=document.getElementById('scan-line');
-  filas.forEach((row,i)=>{
-    const d=i*80;
-    scanTimers.push(
-      setTimeout(()=>{if(sc){sc.style.top=(i*50)+'px';sc.style.opacity='1';}},Math.max(0,d-25)),
-      setTimeout(()=>row.classList.add('sliding'),d),
-      setTimeout(()=>row.classList.add('landed'),d+400),
-      setTimeout(()=>{if(i===filas.length-1&&sc)sc.style.opacity='0';},d+480)
-    );
+  scanTimers.forEach(clearTimeout);scanTimers=[];const sc=document.getElementById('scan-line');
+  filas.forEach((row,i)=>{const d=i*80;
+    scanTimers.push(setTimeout(()=>{if(sc){sc.style.top=(i*50)+'px';sc.style.opacity='1';}},Math.max(0,d-25)),setTimeout(()=>row.classList.add('sliding'),d),setTimeout(()=>row.classList.add('landed'),d+400),setTimeout(()=>{if(i===filas.length-1&&sc)sc.style.opacity='0';},d+480));
   });
 }
 
-// ════════════════════════════════════════════════════════
-//  LISTA PACIENTES
-// ════════════════════════════════════════════════════════
+// ════ LISTA ════
 function cambiarOrden(){ordenAsc=!ordenAsc;const ic=document.getElementById('icon-fecha');if(ic)ic.textContent=ordenAsc?'▲':'▼';renderLista();}
 function renderLista(){
   const q=(document.getElementById('search-nombre')?.value||'').toLowerCase();
@@ -1431,50 +830,24 @@ function renderLista(){
   const cl=document.getElementById('count-label');if(cl)cl.textContent=f.length===0?'Sin resultados':`${f.length} paciente${f.length===1?'':'s'}`;
   const np=document.getElementById('no-pacientes');if(np)np.style.display=f.length===0?'block':'none';
   const eB={'Pendiente':'badge-yellow','En proceso':'badge-blue','Listo para entregar':'badge-blue','Entregado':'badge-green','Cancelado':'badge-gray'};
-  const tbody=document.getElementById('tabla-pacientes');
-  if(!tbody)return;
+  const tbody=document.getElementById('tabla-pacientes');if(!tbody)return;
   tbody.innerHTML=f.map((p,i)=>{
     const dias=diasDesde(p.fecha),a6=dias>=180;
     const dStr=[...(p.diagnostico||[]),p.diagOtro].filter(Boolean).join(', ')||'—';
     const ms=p.material?p.material.match(/\d\.\d+/)?.[0]||p.material.split(' ')[0]:'—';
-    return `<tr${p.id===ultimoId?' class="new-row"':''}>
-      <td style="padding:0 10px"><span style="font-size:.69rem;color:${i<3?'var(--primary)':'var(--gray-light)'};font-weight:700">${i+1}</span></td>
-      <td style="padding:0 10px"><strong style="color:var(--primary)">${formatDate(p.fecha)}</strong><br><small style="color:${dias>=180?'var(--red)':dias>=150?'var(--yellow)':'var(--gray-light)'}">${dias}d</small></td>
-      <td style="padding:0 10px"><strong>${p.nombre}</strong>${a6?'<br><span class="badge badge-red" style="font-size:.65rem">⚠ Control</span>':''}</td>
-      <td style="padding:0 10px">${p.telefono}</td>
-      <td style="padding:0 10px;max-width:110px;word-break:break-word;font-size:.77rem">${dStr}</td>
-      <td style="padding:0 10px;font-size:.77rem;color:var(--primary);font-weight:600">${ms}</td>
-      <td style="padding:0 10px">${fmt(p.costo)}</td>
-      <td style="padding:0 10px"><strong style="color:${p.adeudo>0?'var(--red)':'var(--green)'}">${p.adeudo>0?fmt(p.adeudo):'Pagado ✓'}</strong></td>
-      <td style="padding:0 10px"><span class="badge ${eB[p.estadoPedido]||'badge-gray'}">${p.estadoPedido}</span></td>
-      <td style="padding:0 8px;white-space:nowrap">
-        <button class="btn btn-primary btn-sm" onclick="verExpediente('${p.id}')">👁</button>
-        <button class="btn btn-outline btn-sm" onclick="editarPaciente('${p.id}')">✏️</button>
-        <button class="btn btn-gray btn-sm" onclick="abrirPago('${p.id}')">💰</button>
-        <button class="btn btn-whatsapp btn-sm" onclick="enviarWhatsAppDirecto('${p.id}')">💬</button>
-        <button class="btn btn-red btn-sm" onclick="eliminarPaciente('${p.id}')">🗑</button>
-      </td></tr>`;
+    return `<tr${p.id===ultimoId?' class="new-row"':''}><td style="padding:0 10px"><span style="font-size:.69rem;color:${i<3?'var(--primary)':'var(--gray-light)'};font-weight:700">${i+1}</span></td><td style="padding:0 10px"><strong style="color:var(--primary)">${formatDate(p.fecha)}</strong><br><small style="color:${dias>=180?'var(--red)':dias>=150?'var(--yellow)':'var(--gray-light)'}">${dias}d</small></td><td style="padding:0 10px"><strong>${p.nombre}</strong>${a6?'<br><span class="badge badge-red" style="font-size:.65rem">⚠ Control</span>':''}</td><td style="padding:0 10px">${p.telefono}</td><td style="padding:0 10px;max-width:110px;word-break:break-word;font-size:.77rem">${dStr}</td><td style="padding:0 10px;font-size:.77rem;color:var(--primary);font-weight:600">${ms}</td><td style="padding:0 10px">${fmt(p.costo)}</td><td style="padding:0 10px"><strong style="color:${p.adeudo>0?'var(--red)':'var(--green)'}">${p.adeudo>0?fmt(p.adeudo):'Pagado ✓'}</strong></td><td style="padding:0 10px"><span class="badge ${eB[p.estadoPedido]||'badge-gray'}">${p.estadoPedido}</span></td><td style="padding:0 8px;white-space:nowrap"><button class="btn btn-primary btn-sm" onclick="verExpediente('${p.id}')">👁</button> <button class="btn btn-outline btn-sm" onclick="editarPaciente('${p.id}')">✏️</button> <button class="btn btn-gray btn-sm" onclick="abrirPago('${p.id}')">💰</button> <button class="btn btn-whatsapp btn-sm" onclick="enviarWhatsAppDirecto('${p.id}')">💬</button> <button class="btn btn-red btn-sm" onclick="eliminarPaciente('${p.id}')">🗑</button></td></tr>`;
   }).join('');
   animarFilas(Array.from(tbody.querySelectorAll('tr')));
 }
 
-// ════════════════════════════════════════════════════════
-//  CRUD
-// ════════════════════════════════════════════════════════
-async function eliminarPaciente(id){
-  if(!confirm('¿Eliminar este expediente?'))return;
-  await deletePatient(id);
-  pacientes=pacientes.filter(p=>p.id!==id);
-  renderLista();showToast('🗑️ Eliminado','error');
-}
+// ════ CRUD ════
+async function eliminarPaciente(id){if(!confirm('¿Eliminar este expediente?'))return;await deletePatient(id);pacientes=pacientes.filter(p=>p.id!==id);renderLista();showToast('🗑️ Eliminado','error');}
 function editarPaciente(id){
   const p=pacientes.find(x=>x.id===id);if(!p)return;editandoId=id;showView('nuevo');
   setTimeout(()=>{
     const sv=(id,v)=>{const el=document.getElementById(id);if(el)el.value=v||'';};
     sv('f-nombre',p.nombre);sv('f-edad',p.edad);sv('f-genero',p.genero);sv('f-ocupacion',p.ocupacion);sv('f-telefono',p.telefono);sv('f-fecha',p.fecha||today());sv('f-motivo',p.motivo);
-    setChecked('antec-personales',p.antecPersonales||[]);sv('f-antec-otros',p.antecPersonalesOtros);
-    setChecked('antec-familiares',p.antecFamiliares||[]);sv('f-antec-fam-otros',p.antecFamiliaresOtros);
-    setChecked('sintomas',p.sintomas||[]);sv('f-sintoma-otro',p.sintomaOtro);
+    setChecked('antec-personales',p.antecPersonales||[]);sv('f-antec-otros',p.antecPersonalesOtros);setChecked('antec-familiares',p.antecFamiliares||[]);sv('f-antec-fam-otros',p.antecFamiliaresOtros);setChecked('sintomas',p.sintomas||[]);sv('f-sintoma-otro',p.sintomaOtro);
     if(p.av){sv('av-od-lsc',p.av.odLsc);sv('av-od-lcc',p.av.odLcc);sv('av-od-csc',p.av.odCsc);sv('av-od-ccc',p.av.odCcc);sv('av-oi-lsc',p.av.oiLsc);sv('av-oi-lcc',p.av.oiLcc);sv('av-oi-csc',p.av.oiCsc);sv('av-oi-ccc',p.av.oiCcc);sv('av-ao-l',p.av.aoL);sv('av-ao-c',p.av.aoC);}
     ['esf','cil','eje','add','av'].forEach(k=>{sv('ret-od-'+k,p.retinoscopiaOD?.[k]);sv('ret-oi-'+k,p.retinoscopiaOI?.[k]);});
     ['esf','cil','eje','add','pri','av'].forEach(k=>{sv('sub-od-'+k,p.subjetivoOD?.[k]);sv('sub-oi-'+k,p.subjetivoOI?.[k]);sv('rec-od-'+k,p.recetaOD?.[k]);sv('rec-oi-'+k,p.recetaOI?.[k]);});
@@ -1489,9 +862,7 @@ function editarPaciente(id){
 }
 function editarPacienteModal(){closeModal('modal-exp');editarPaciente(expId);}
 
-// ════════════════════════════════════════════════════════
-//  VER EXPEDIENTE
-// ════════════════════════════════════════════════════════
+// ════ VER EXPEDIENTE ════
 function verExpediente(id){
   const p=pacientes.find(x=>x.id===id);if(!p)return;expId=id;
   const dias=diasDesde(p.fecha),alerta=dias>=180;
@@ -1501,218 +872,75 @@ function verExpediente(id){
   const diagStr=[...(p.diagnostico||[]),p.diagOtro].filter(Boolean).join(', ')||'—';
   const abonosHtml=p.abonos?.length?`<div class="section-label">Historial de Abonos</div>${p.abonos.map(a=>`<div style="font-size:.81rem;padding:4px 0;border-bottom:1px solid var(--border)">📅 ${formatDate(a.fecha)} — <strong>${fmt(a.monto)}</strong>${a.nota?' · '+a.nota:''}</div>`).join('')}`:'';
   const mb=document.getElementById('modal-exp-body');
-  if(mb)mb.innerHTML=`${aH}
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;font-size:.83rem;margin-bottom:14px">
-      <div><strong style="color:var(--gray-mid);font-size:.69rem">NOMBRE</strong><div style="font-size:.97rem;font-weight:700">${p.nombre}</div></div>
-      <div><strong style="color:var(--gray-mid);font-size:.69rem">FECHA</strong><div>${formatDate(p.fecha)}</div></div>
-      <div><strong style="color:var(--gray-mid);font-size:.69rem">EDAD</strong><div>${p.edad||'—'} años</div></div>
-      <div><strong style="color:var(--gray-mid);font-size:.69rem">TELÉFONO</strong><div>${p.telefono}</div></div>
-      <div style="grid-column:1/-1"><strong style="color:var(--gray-mid);font-size:.69rem">MOTIVO</strong><div>${p.motivo}</div></div>
-    </div>
-    <div class="section-label">📋 Diagnóstico</div>
-    <div style="margin-bottom:12px"><span style="background:var(--primary-light);color:var(--primary);padding:4px 12px;border-radius:20px;font-weight:600;font-size:.85rem">${diagStr}</span></div>
-    <div class="section-label">🔬 Receta Final</div>
-    <div style="overflow-x:auto;margin-bottom:12px">
-      <table class="av-table"><thead><tr><th>Ojo</th><th>Esfera</th><th>Cilindro</th><th>Eje</th><th>Adición</th><th>Prisma</th><th>AV</th></tr></thead>
-      <tbody>
-        <tr><td class="eye-label">OD</td><td>${p.recetaOD?.esf||'—'}</td><td>${p.recetaOD?.cil||'—'}</td><td>${p.recetaOD?.eje||'—'}</td><td>${p.recetaOD?.add||'—'}</td><td>${p.recetaOD?.pri||'—'}</td><td>${p.recetaOD?.av||'—'}</td></tr>
-        <tr><td class="eye-label">OI</td><td>${p.recetaOI?.esf||'—'}</td><td>${p.recetaOI?.cil||'—'}</td><td>${p.recetaOI?.eje||'—'}</td><td>${p.recetaOI?.add||'—'}</td><td>${p.recetaOI?.pri||'—'}</td><td>${p.recetaOI?.av||'—'}</td></tr>
-      </tbody></table>
-    </div>
-    <div class="section-label">🥽 Lente — <span style="color:var(--primary)">${p.material||'Sin especificar'}</span></div>
-    <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px">
-      ${[...(p.tratamientos||[]),p.tratOtros].filter(Boolean).map(t=>`<span style="background:var(--green-light);color:var(--green);padding:2px 9px;border-radius:20px;font-size:.75rem;font-weight:600">${t}</span>`).join('')||'<span style="color:var(--gray-mid)">Ninguno</span>'}
-    </div>
-    <div class="section-label">💰 Estado Financiero</div>
-    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:10px">
-      <div><div style="color:var(--gray-mid);font-size:.69rem">COSTO</div><div style="font-size:1.1rem;font-weight:700;color:var(--primary)">${fmt(p.costo)}</div></div>
-      <div><div style="color:var(--gray-mid);font-size:.69rem">ANTICIPO</div><div style="font-size:1.1rem;font-weight:700;color:var(--green)">${fmt(p.anticipo)}</div></div>
-      <div><div style="color:var(--gray-mid);font-size:.69rem">ADEUDO</div><div style="font-size:1.2rem;font-weight:700;color:${p.adeudo>0?'var(--red)':'var(--green)'}">${p.adeudo>0?fmt(p.adeudo):'PAGADO ✓'}</div></div>
-      <div><div style="color:var(--gray-mid);font-size:.69rem">ESTADO</div><div>${p.estadoPedido}</div></div>
-    </div>${abonosHtml}`;
+  if(mb)mb.innerHTML=`${aH}<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;font-size:.83rem;margin-bottom:14px"><div><strong style="color:var(--gray-mid);font-size:.69rem">NOMBRE</strong><div style="font-size:.97rem;font-weight:700">${p.nombre}</div></div><div><strong style="color:var(--gray-mid);font-size:.69rem">FECHA</strong><div>${formatDate(p.fecha)}</div></div><div><strong style="color:var(--gray-mid);font-size:.69rem">EDAD</strong><div>${p.edad||'—'} años</div></div><div><strong style="color:var(--gray-mid);font-size:.69rem">TELÉFONO</strong><div>${p.telefono}</div></div><div style="grid-column:1/-1"><strong style="color:var(--gray-mid);font-size:.69rem">MOTIVO</strong><div>${p.motivo}</div></div></div><div class="section-label">📋 Diagnóstico</div><div style="margin-bottom:12px"><span style="background:var(--primary-light);color:var(--primary);padding:4px 12px;border-radius:20px;font-weight:600;font-size:.85rem">${diagStr}</span></div><div class="section-label">🔬 Receta Final</div><div style="overflow-x:auto;margin-bottom:12px"><table class="av-table"><thead><tr><th>Ojo</th><th>Esfera</th><th>Cilindro</th><th>Eje</th><th>Adición</th><th>Prisma</th><th>AV</th></tr></thead><tbody><tr><td class="eye-label">OD</td><td>${p.recetaOD?.esf||'—'}</td><td>${p.recetaOD?.cil||'—'}</td><td>${p.recetaOD?.eje||'—'}</td><td>${p.recetaOD?.add||'—'}</td><td>${p.recetaOD?.pri||'—'}</td><td>${p.recetaOD?.av||'—'}</td></tr><tr><td class="eye-label">OI</td><td>${p.recetaOI?.esf||'—'}</td><td>${p.recetaOI?.cil||'—'}</td><td>${p.recetaOI?.eje||'—'}</td><td>${p.recetaOI?.add||'—'}</td><td>${p.recetaOI?.pri||'—'}</td><td>${p.recetaOI?.av||'—'}</td></tr></tbody></table></div><div class="section-label">🥽 Lente — <span style="color:var(--primary)">${p.material||'Sin especificar'}</span></div><div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px">${[...(p.tratamientos||[]),p.tratOtros].filter(Boolean).map(t=>`<span style="background:var(--green-light);color:var(--green);padding:2px 9px;border-radius:20px;font-size:.75rem;font-weight:600">${t}</span>`).join('')||'<span style="color:var(--gray-mid)">Ninguno</span>'}</div><div class="section-label">💰 Estado Financiero</div><div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:10px"><div><div style="color:var(--gray-mid);font-size:.69rem">COSTO</div><div style="font-size:1.1rem;font-weight:700;color:var(--primary)">${fmt(p.costo)}</div></div><div><div style="color:var(--gray-mid);font-size:.69rem">ANTICIPO</div><div style="font-size:1.1rem;font-weight:700;color:var(--green)">${fmt(p.anticipo)}</div></div><div><div style="color:var(--gray-mid);font-size:.69rem">ADEUDO</div><div style="font-size:1.2rem;font-weight:700;color:${p.adeudo>0?'var(--red)':'var(--green)'}">${p.adeudo>0?fmt(p.adeudo):'PAGADO ✓'}</div></div><div><div style="color:var(--gray-mid);font-size:.69rem">ESTADO</div><div>${p.estadoPedido}</div></div></div>${abonosHtml}`;
   openModal('modal-exp');
 }
 
-// ════════════════════════════════════════════════════════
-//  WHATSAPP
-// ════════════════════════════════════════════════════════
+// ════ WHATSAPP ════
 function generarMensajeWA(p){
   const n=config.nombre||'la optica';
   const tratStr=[...(p.tratamientos||[]),p.tratOtros].filter(Boolean).join(', ')||'—';
   const diags=[...(p.diagnostico||[]),p.diagOtro].filter(Boolean).join(', ')||'—';
-  return [`*${n}*`,config.tel?`Tel: ${config.tel}`:'',config.domicilio||'','','━━━━━━━━━━━━━━━━━━━━',`*EXPEDIENTE / RESUMEN*`,'━━━━━━━━━━━━━━━━━━━━','',`*Paciente:* ${p.nombre}`,p.edad?`*Edad:* ${p.edad} anos`:'',`*Consulta:* ${formatDate(p.fecha)}`,`*Diagnostico:* ${diags}`,p.material?`*Material:* ${p.material}`:'',tratStr!=='—'?`*Tratamientos:* ${tratStr}`:'','','━━━━━━━━━━━━━━━━━━━━',`*ESTADO DE CUENTA*`,'━━━━━━━━━━━━━━━━━━━━','',`*Costo total:* ${fmt(p.costo)}`,`*Anticipo pagado:* ${fmt(p.anticipo)}`,'',p.adeudo>0?`*Saldo pendiente: ${fmt(p.adeudo)}*`:`*Cuenta LIQUIDADA - Gracias!*`,p.estadoPedido?`*Estado del pedido:* ${p.estadoPedido}`:'','','━━━━━━━━━━━━━━━━━━━━',`Gracias por su preferencia, *${p.nombre.split(' ')[0]}*!`,config.redes||''].filter(l=>l!==null&&l!==undefined&&l!==false&&l!=='').join('\n');
+  return [`*${n}*`,config.tel?`Tel: ${config.tel}`:'',config.domicilio||'','','━━━━━━━━━━━━━━━━━━━━','*EXPEDIENTE / RESUMEN*','━━━━━━━━━━━━━━━━━━━━','',`*Paciente:* ${p.nombre}`,p.edad?`*Edad:* ${p.edad} anos`:'',`*Consulta:* ${formatDate(p.fecha)}`,`*Diagnostico:* ${diags}`,p.material?`*Material:* ${p.material}`:'',tratStr!=='—'?`*Tratamientos:* ${tratStr}`:'','','━━━━━━━━━━━━━━━━━━━━','*ESTADO DE CUENTA*','━━━━━━━━━━━━━━━━━━━━','',`*Costo total:* ${fmt(p.costo)}`,`*Anticipo pagado:* ${fmt(p.anticipo)}`,'',p.adeudo>0?`*Saldo pendiente: ${fmt(p.adeudo)}*`:`*Cuenta LIQUIDADA - Gracias!*`,p.estadoPedido?`*Estado del pedido:* ${p.estadoPedido}`:'','','━━━━━━━━━━━━━━━━━━━━',`Gracias por su preferencia, *${p.nombre.split(' ')[0]}*!`,config.redes||''].filter(l=>l!==null&&l!==undefined&&l!==false&&l!=='').join('\n');
 }
-function abrirWA(tel,msg){
-  const encoded=encodeURIComponent(msg);
-  if(config.waDirecto){window.location.href='whatsapp://send?phone='+tel.replace(/\D/g,'')+'&text='+encoded;}
-  else{window.location.href='whatsapp://send?text='+encoded;}
-}
+function abrirWA(tel,msg){const encoded=encodeURIComponent(msg);if(config.waDirecto){window.location.href='whatsapp://send?phone='+tel.replace(/\D/g,'')+'&text='+encoded;}else{window.location.href='whatsapp://send?text='+encoded;}}
 function enviarWhatsApp(){const p=pacientes.find(x=>x.id===expId);if(!p)return;abrirWA(config.wa||p.telefono,generarMensajeWA(p));}
 function enviarWhatsAppDirecto(id){const p=pacientes.find(x=>x.id===id);if(!p)return;abrirWA(config.wa||p.telefono,generarMensajeWA(p));}
 
-// ════════════════════════════════════════════════════════
-//  PDF
-// ════════════════════════════════════════════════════════
+// ════ PDF ════
 function imprimirExpediente(){
   const p=pacientes.find(x=>x.id===expId);if(!p)return;
   const fN=pacientes.filter(x=>new Date(x.fecha+'T12:00:00')<=new Date(p.fecha+'T12:00:00')).length;
   const logoHTML=config.logo?`<img class="p-logo" src="${config.logo}">`:`<div class="p-logo-ph">👁️</div>`;
-  const clinDetails=[config.tel?`Tel: ${config.tel}`:'',config.domicilio?config.domicilio:'',config.email?config.email:'',config.redes?config.redes:''].filter(Boolean).join(' | ');
-  const rRow=(od,oi,hasPri=false)=>`<tr><td class="eye">OD</td><td>${od?.esf||'—'}</td><td>${od?.cil||'—'}</td><td>${od?.eje||'—'}</td><td>${od?.add||'—'}</td>${hasPri?`<td>${od?.pri||'—'}</td>`:''}<td>${od?.av||'—'}</td></tr><tr><td class="eye">OI</td><td>${oi?.esf||'—'}</td><td>${oi?.cil||'—'}</td><td>${oi?.eje||'—'}</td><td>${oi?.add||'—'}</td>${hasPri?`<td>${oi?.pri||'—'}</td>`:''}<td>${oi?.av||'—'}</td></tr>`;
+  const clinDetails=[config.tel?`Tel: ${config.tel}`:'',config.domicilio||'',config.email||'',config.redes||''].filter(Boolean).join(' | ');
+  const rRow=(od,oi)=>`<tr><td class="eye">OD</td><td>${od?.esf||'—'}</td><td>${od?.cil||'—'}</td><td>${od?.eje||'—'}</td><td>${od?.add||'—'}</td><td>${od?.av||'—'}</td></tr><tr><td class="eye">OI</td><td>${oi?.esf||'—'}</td><td>${oi?.cil||'—'}</td><td>${oi?.eje||'—'}</td><td>${oi?.add||'—'}</td><td>${oi?.av||'—'}</td></tr>`;
   const diagStr=[...(p.diagnostico||[]),p.diagOtro].filter(Boolean).join(' · ')||'—';
   const condStr=[...(p.conducta||[]),p.conductaOtro].filter(Boolean).join(' · ')||'—';
   const tratStr=[...(p.tratamientos||[]),p.tratOtros].filter(Boolean);
   const pa=document.getElementById('print-area');
-  if(pa)pa.innerHTML=`<div style="font-family:'DM Sans',sans-serif;font-size:9pt;line-height:1.45;color:#1a1a1a">
-    <div class="p-header">${logoHTML}<div style="flex:1"><div class="p-clinic-name">${config.nombre||'Bitácora Optométrica'}</div><div class="p-clinic-details">${clinDetails}</div></div><div class="p-title-block"><div class="p-doc-type">Expediente Clínico</div><div class="p-date">Impreso: ${formatDate(today())}</div><div class="p-folio">FOLIO #${String(fN).padStart(4,'0')}</div></div></div>
-    <div class="p-banner"><div><div class="p-banner-name">${p.nombre}</div><div class="p-banner-info">${formatDate(p.fecha)} · ${p.motivo}</div></div><div class="p-banner-right">${p.edad||''} ${p.genero?'| '+p.genero:''}<br>${p.telefono}</div></div>
-    <div class="p-sec"><div class="p-sec-title">Anamnesis</div><div class="p-grid c2"><div class="pf s2"><span class="lbl">Antec. personales</span><span class="val">${[...(p.antecPersonales||[]),p.antecPersonalesOtros].filter(Boolean).join(' · ')||'Ninguno'}</span></div><div class="pf s2"><span class="lbl">Sintomas</span><span class="val">${[...(p.sintomas||[]),p.sintomaOtro].filter(Boolean).join(' · ')||'Ninguno'}</span></div></div></div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:9px">
-      <div class="p-sec" style="margin-bottom:0"><div class="p-sec-title">Agudeza Visual</div><table class="p-table"><thead><tr><th>Ojo</th><th>Lejos S/C</th><th>Lejos C/C</th><th>Cerca S/C</th><th>Cerca C/C</th></tr></thead><tbody><tr><td class="eye">OD</td><td>${p.av?.odLsc||'—'}</td><td>${p.av?.odLcc||'—'}</td><td>${p.av?.odCsc||'—'}</td><td>${p.av?.odCcc||'—'}</td></tr><tr><td class="eye">OI</td><td>${p.av?.oiLsc||'—'}</td><td>${p.av?.oiLcc||'—'}</td><td>${p.av?.oiCsc||'—'}</td><td>${p.av?.oiCcc||'—'}</td></tr></tbody></table></div>
-      <div class="p-sec" style="margin-bottom:0"><div class="p-sec-title">Examen Externo</div><div class="p-grid c2">${[['Parpados',p.exParpados],['Conjuntiva',p.exConjuntiva],['Cornea',p.exCornea],['Pupilas',p.exPupilas]].map(([k,v])=>`<div class="pf"><span class="lbl">${k}</span><span class="val">${v||'—'}</span></div>`).join('')}${p.pioOD?`<div class="pf"><span class="lbl">PIO OD</span><span class="val">${p.pioOD} mmHg</span></div><div class="pf"><span class="lbl">PIO OI</span><span class="val">${p.pioOI||'—'} mmHg</span></div>`:''}</div></div>
-    </div>
-    <div class="p-sec"><div class="p-sec-title">Refraccion</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:7px">
-        <div><div style="font-size:7pt;color:#888;font-weight:600;margin-bottom:3px">RETINOSCOPIA</div><table class="p-table"><thead><tr><th>Ojo</th><th>Esfera</th><th>Cilindro</th><th>Eje</th><th>Add</th><th>AV</th></tr></thead><tbody>${rRow(p.retinoscopiaOD,p.retinoscopiaOI)}</tbody></table></div>
-        <div><div style="font-size:7pt;color:#888;font-weight:600;margin-bottom:3px">SUBJETIVO</div><table class="p-table"><thead><tr><th>Ojo</th><th>Esfera</th><th>Cilindro</th><th>Eje</th><th>Add</th><th>AV</th></tr></thead><tbody>${rRow(p.subjetivoOD,p.subjetivoOI)}</tbody></table></div>
-      </div>
-      <div style="font-size:7pt;color:#2E7D32;font-weight:700;margin-bottom:3px">RECETA FINAL</div>
-      <table class="p-table"><thead><tr><th>Ojo</th><th>Esfera</th><th>Cilindro</th><th>Eje</th><th>Adicion</th><th>Prisma</th><th>AV Final</th><th>DIP</th></tr></thead><tbody>
-        <tr><td class="eye">OD</td><td>${p.recetaOD?.esf||'—'}</td><td>${p.recetaOD?.cil||'—'}</td><td>${p.recetaOD?.eje||'—'}</td><td>${p.recetaOD?.add||'—'}</td><td>${p.recetaOD?.pri||'—'}</td><td>${p.recetaOD?.av||'—'}</td><td rowspan="2" style="font-weight:700;color:#1565C0">${p.dip||'—'}</td></tr>
-        <tr><td class="eye">OI</td><td>${p.recetaOI?.esf||'—'}</td><td>${p.recetaOI?.cil||'—'}</td><td>${p.recetaOI?.eje||'—'}</td><td>${p.recetaOI?.add||'—'}</td><td>${p.recetaOI?.pri||'—'}</td><td>${p.recetaOI?.av||'—'}</td></tr>
-      </tbody></table>
-    </div>
-    <div style="display:grid;grid-template-columns:1.2fr 1fr;gap:10px;margin-bottom:9px">
-      <div class="p-sec" style="margin-bottom:0"><div class="p-sec-title">Especificaciones del Lente</div><div class="p-grid c2"><div class="pf"><span class="lbl">Diseno</span><span class="val">${p.tipoLente||'—'}</span></div><div class="pf"><span class="lbl">Material</span><span class="val" style="color:#1565C0;font-weight:700">${p.material||'—'}</span></div><div class="pf s2"><span class="lbl">Tinte</span><span class="val">${p.tinte||'Sin tinte'}</span></div></div>${tratStr.length?`<div style="margin-top:5px"><div class="p-chips">${tratStr.map(t=>`<span class="p-chip">${t}</span>`).join('')}</div></div>`:''}</div>
-      <div class="p-sec" style="margin-bottom:0"><div class="p-sec-title">Diagnostico y Conducta</div><div class="p-chips" style="margin-bottom:5px">${[...(p.diagnostico||[]),p.diagOtro].filter(Boolean).map(d=>`<span class="p-chip d">${d}</span>`).join('')||'—'}</div><div class="pf"><span class="lbl">Conducta</span><span class="val">${condStr}</span></div>${p.proximoControl?`<div class="pf"><span class="lbl">Proximo control</span><span class="val" style="color:#1565C0;font-weight:700">${formatDate(p.proximoControl)}</span></div>`:''}</div>
-    </div>
-    <div class="p-sec"><div class="p-sec-title r">Estado Financiero</div><div class="p-fin"><div class="p-fin-grid"><div class="p-fin-item ft"><div class="fl">Costo total</div><div class="fv">${fmt(p.costo)}</div></div><div class="p-fin-item fp"><div class="fl">Anticipo pagado</div><div class="fv">${fmt(p.anticipo)}</div></div><div class="p-fin-item fa"><div class="fl">${p.adeudo>0?'Saldo pendiente':'Estado'}</div><div class="fv ${p.adeudo>0?'rojo':'verde'}">${p.adeudo>0?fmt(p.adeudo):'LIQUIDADO'}</div></div></div><div class="p-fin-status">Estado: <strong>${p.estadoPedido}</strong> · Pago: <strong>${p.metodoPago||'—'}</strong></div></div></div>
-    <div class="p-footer"><span><strong>${config.nombre||'Bitacora Optometrica'}</strong></span><span>Documento confidencial</span><span>Pag. 1</span></div>
-  </div>`;
+  if(pa)pa.innerHTML=`<div style="font-family:'DM Sans',sans-serif;font-size:9pt;line-height:1.45;color:#1a1a1a"><div class="p-header">${logoHTML}<div style="flex:1"><div class="p-clinic-name">${config.nombre||'Bitácora Optométrica'}</div><div class="p-clinic-details">${clinDetails}</div></div><div class="p-title-block"><div class="p-doc-type">Expediente Clínico</div><div class="p-date">Impreso: ${formatDate(today())}</div><div class="p-folio">FOLIO #${String(fN).padStart(4,'0')}</div></div></div><div class="p-banner"><div><div class="p-banner-name">${p.nombre}</div><div class="p-banner-info">${formatDate(p.fecha)} · ${p.motivo}</div></div><div class="p-banner-right">${p.edad||''} ${p.genero?'| '+p.genero:''}<br>${p.telefono}</div></div><div class="p-sec"><div class="p-sec-title">Refraccion — Receta Final</div><table class="p-table"><thead><tr><th>Ojo</th><th>Esfera</th><th>Cilindro</th><th>Eje</th><th>Adicion</th><th>AV Final</th></tr></thead><tbody><tr><td class="eye">OD</td><td>${p.recetaOD?.esf||'—'}</td><td>${p.recetaOD?.cil||'—'}</td><td>${p.recetaOD?.eje||'—'}</td><td>${p.recetaOD?.add||'—'}</td><td>${p.recetaOD?.av||'—'}</td></tr><tr><td class="eye">OI</td><td>${p.recetaOI?.esf||'—'}</td><td>${p.recetaOI?.cil||'—'}</td><td>${p.recetaOI?.eje||'—'}</td><td>${p.recetaOI?.add||'—'}</td><td>${p.recetaOI?.av||'—'}</td></tr></tbody></table></div><div class="p-sec"><div class="p-sec-title r">Estado Financiero</div><div class="p-fin"><div class="p-fin-grid"><div class="p-fin-item ft"><div class="fl">Costo total</div><div class="fv">${fmt(p.costo)}</div></div><div class="p-fin-item fp"><div class="fl">Anticipo</div><div class="fv">${fmt(p.anticipo)}</div></div><div class="p-fin-item fa"><div class="fl">Adeudo</div><div class="fv ${p.adeudo>0?'rojo':'verde'}">${p.adeudo>0?fmt(p.adeudo):'LIQUIDADO'}</div></div></div></div></div><div class="p-footer"><span><strong>${config.nombre||'Bitacora Optometrica'}</strong></span><span>Documento confidencial</span><span>Pag. 1</span></div></div>`;
   setTimeout(()=>window.print(),350);
 }
 
-// ════════════════════════════════════════════════════════
-//  PAGOS
-// ════════════════════════════════════════════════════════
-function abrirPago(id){
-  const p=pacientes.find(x=>x.id===id);if(!p)return;pagoTargetId=id;
-  const pi=document.getElementById('pago-info');
-  if(pi)pi.innerHTML=`<strong>${p.nombre}</strong><br>Costo: ${fmt(p.costo)} | Pagado: ${fmt(p.anticipo)} | <strong style="color:${p.adeudo>0?'var(--red)':'var(--green)'}">Adeudo: ${p.adeudo>0?fmt(p.adeudo):'PAGADO ✓'}</strong>`;
-  const na=document.getElementById('nuevo-abono');if(na)na.value='';
-  const nab=document.getElementById('notas-abono');if(nab)nab.value='';
-  openModal('modal-pago');
-}
+// ════ PAGOS ════
+function abrirPago(id){const p=pacientes.find(x=>x.id===id);if(!p)return;pagoTargetId=id;const pi=document.getElementById('pago-info');if(pi)pi.innerHTML=`<strong>${p.nombre}</strong><br>Costo: ${fmt(p.costo)} | Pagado: ${fmt(p.anticipo)} | <strong style="color:${p.adeudo>0?'var(--red)':'var(--green)'}">Adeudo: ${p.adeudo>0?fmt(p.adeudo):'PAGADO ✓'}</strong>`;const na=document.getElementById('nuevo-abono');if(na)na.value='';const nab=document.getElementById('notas-abono');if(nab)nab.value='';openModal('modal-pago');}
 async function procesarPago(){
   const p=pacientes.find(x=>x.id===pagoTargetId);if(!p)return;
-  const abono=parseFloat(document.getElementById('nuevo-abono').value)||0;
-  if(abono<=0){playErrorSound();return;}
-  p.anticipo=(p.anticipo||0)+abono;
-  p.adeudo=Math.max(0,p.costo-p.anticipo-(p.descuento||0));
-  if(!p.abonos)p.abonos=[];
-  const na=document.getElementById('notas-abono');
-  p.abonos.push({fecha:today(),monto:abono,nota:na?.value||''});
-  await savePatient(p);
-  closeModal('modal-pago');renderLista();playSuccessSound();
-  setTimeout(()=>speak(`Abono de ${abono.toLocaleString('es-MX')} pesos registrado.`),600);
-  showToast(`✅ Abono de ${fmt(abono)} registrado`,'success');
+  const abono=parseFloat(document.getElementById('nuevo-abono').value)||0;if(abono<=0){playErrorSound();return;}
+  p.anticipo=(p.anticipo||0)+abono;p.adeudo=Math.max(0,p.costo-p.anticipo-(p.descuento||0));
+  if(!p.abonos)p.abonos=[];const na=document.getElementById('notas-abono');p.abonos.push({fecha:today(),monto:abono,nota:na?.value||''});
+  await savePatient(p);closeModal('modal-pago');renderLista();playSuccessSound();setTimeout(()=>speak(`Abono de ${abono.toLocaleString('es-MX')} pesos registrado.`),600);showToast(`✅ Abono de ${fmt(abono)} registrado`,'success');
 }
 
-// ════════════════════════════════════════════════════════
-//  SEGUIMIENTO
-// ════════════════════════════════════════════════════════
+// ════ SEGUIMIENTO ════
 function renderSeguimiento(){
   const c=document.getElementById('seguimiento-list');if(!c)return;
   if(!pacientes.length){c.innerHTML='<p style="color:var(--gray-light);text-align:center;padding:28px">No hay pacientes.</p>';return;}
   c.innerHTML=[...pacientes].sort((a,b)=>diasDesde(b.fecha)-diasDesde(a.fecha)).map(p=>{
     const dias=diasDesde(p.fecha),al=dias>=180,pct=Math.min(100,Math.round((dias/180)*100));
-    return `<div class="seg-card ${al?'':'ok'}"><div>
-      <h3 style="font-size:.91rem;font-weight:700;color:var(--text)">${p.nombre} ${al?'⚠️':'✅'}</h3>
-      <p style="font-size:.78rem;color:var(--gray-mid)">📅 ${formatDate(p.fecha)} · <strong>${dias}</strong> días · 📞 ${p.telefono}</p>
-      <div style="margin-top:5px;display:flex;align-items:center;gap:7px"><div style="width:130px;height:7px;background:var(--bg3);border-radius:4px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${dias>=180?'var(--red)':dias>=150?'var(--yellow)':'var(--primary)'};border-radius:4px"></div></div><span style="font-size:.73rem;color:var(--gray-mid)">${pct}%</span></div>
-    </div>
-    <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap">
-      <span class="badge ${al?'badge-red':'badge-green'}">${al?'Control urgente':'En seguimiento'}</span>
-      <button class="btn btn-primary btn-sm" onclick="verExpediente('${p.id}')">👁</button>
-      <button class="btn btn-whatsapp btn-sm" onclick="enviarWhatsAppDirecto('${p.id}')">💬</button>
-      ${al?`<button class="btn btn-gray btn-sm" onclick="speak('El paciente ${p.nombre} requiere revision.')">🔊</button>`:''}
-    </div></div>`;
+    return `<div class="seg-card ${al?'':'ok'}"><div><h3 style="font-size:.91rem;font-weight:700;color:var(--text)">${p.nombre} ${al?'⚠️':'✅'}</h3><p style="font-size:.78rem;color:var(--gray-mid)">📅 ${formatDate(p.fecha)} · <strong>${dias}</strong> días · 📞 ${p.telefono}</p><div style="margin-top:5px;display:flex;align-items:center;gap:7px"><div style="width:130px;height:7px;background:var(--bg3);border-radius:4px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${dias>=180?'var(--red)':dias>=150?'var(--yellow)':'var(--primary)'};border-radius:4px"></div></div><span style="font-size:.73rem;color:var(--gray-mid)">${pct}%</span></div></div><div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap"><span class="badge ${al?'badge-red':'badge-green'}">${al?'Control urgente':'En seguimiento'}</span><button class="btn btn-primary btn-sm" onclick="verExpediente('${p.id}')">👁</button><button class="btn btn-whatsapp btn-sm" onclick="enviarWhatsAppDirecto('${p.id}')">💬</button>${al?`<button class="btn btn-gray btn-sm" onclick="speak('El paciente ${p.nombre} requiere revision.')">🔊</button>`:''}</div></div>`;
   }).join('');
 }
 
-// ════════════════════════════════════════════════════════
-//  DASHBOARD
-// ════════════════════════════════════════════════════════
+// ════ DASHBOARD ════
 function renderDashboard(){
   const total=pacientes.length,ctrl=pacientes.filter(p=>diasDesde(p.fecha)>=180).length,conAd=pacientes.filter(p=>p.adeudo>0).length,totAd=pacientes.reduce((s,p)=>s+(p.adeudo||0),0);
-  const sg=document.getElementById('stats-grid');
-  if(sg)sg.innerHTML=`
-    <div class="stat-card"><div class="stat-num">${total}</div><div class="stat-desc">Pacientes registrados</div></div>
-    <div class="stat-card red"><div class="stat-num">${ctrl}</div><div class="stat-desc">Requieren control (6m+)</div></div>
-    <div class="stat-card yellow"><div class="stat-num">${conAd}</div><div class="stat-desc">Con adeudo pendiente</div></div>
-    <div class="stat-card green"><div class="stat-num">${fmt(totAd)}</div><div class="stat-desc">Total en adeudos</div></div>`;
+  const sg=document.getElementById('stats-grid');if(sg)sg.innerHTML=`<div class="stat-card"><div class="stat-num">${total}</div><div class="stat-desc">Pacientes registrados</div></div><div class="stat-card red"><div class="stat-num">${ctrl}</div><div class="stat-desc">Requieren control (6m+)</div></div><div class="stat-card yellow"><div class="stat-num">${conAd}</div><div class="stat-desc">Con adeudo pendiente</div></div><div class="stat-card green"><div class="stat-num">${fmt(totAd)}</div><div class="stat-desc">Total en adeudos</div></div>`;
   const alertas=pacientes.filter(p=>diasDesde(p.fecha)>=180).sort((a,b)=>diasDesde(b.fecha)-diasDesde(a.fecha));
-  const da=document.getElementById('dashboard-alerts');
-  if(da)da.innerHTML=alertas.length===0
-    ?'<div class="alert-banner green">✅ Todos los pacientes dentro del periodo de seguimiento.</div>'
-    :alertas.slice(0,5).map(p=>`<div class="seg-card" style="margin-bottom:8px"><div><h3 style="font-size:.87rem;font-weight:700;color:var(--text)">${p.nombre}</h3><p style="font-size:.77rem;color:var(--gray-mid)">${diasDesde(p.fecha)} días · 📞 ${p.telefono}</p></div><div style="display:flex;gap:5px"><button class="btn btn-primary btn-sm" onclick="verExpediente('${p.id}')">Ver</button><button class="btn btn-whatsapp btn-sm" onclick="enviarWhatsAppDirecto('${p.id}')">💬</button></div></div>`).join('');
-  const rec=sortByFecha(pacientes).slice(0,5);
-  const dr=document.getElementById('dashboard-recent');
-  if(dr)dr.innerHTML=rec.length===0
-    ?'<p style="color:var(--gray-light);text-align:center;padding:18px">No hay pacientes aún.</p>'
-    :`<table class="patient-table" style="min-width:auto"><thead><tr><th>Fecha</th><th>Nombre</th><th>Material</th><th>Adeudo</th></tr></thead><tbody>${rec.map(p=>`<tr style="opacity:1;transform:none"><td style="padding:8px 10px"><strong>${formatDate(p.fecha)}</strong></td><td style="padding:8px 10px">${p.nombre}</td><td style="padding:8px 10px;font-size:.77rem;color:var(--primary)">${p.material||'—'}</td><td style="padding:8px 10px;color:${p.adeudo>0?'var(--red)':'var(--green)'}"><strong>${p.adeudo>0?fmt(p.adeudo):'Pagado ✓'}</strong></td></tr>`).join('')}</tbody></table>`;
+  const da=document.getElementById('dashboard-alerts');if(da)da.innerHTML=alertas.length===0?'<div class="alert-banner green">✅ Todos los pacientes dentro del periodo de seguimiento.</div>':alertas.slice(0,5).map(p=>`<div class="seg-card" style="margin-bottom:8px"><div><h3 style="font-size:.87rem;font-weight:700;color:var(--text)">${p.nombre}</h3><p style="font-size:.77rem;color:var(--gray-mid)">${diasDesde(p.fecha)} días · 📞 ${p.telefono}</p></div><div style="display:flex;gap:5px"><button class="btn btn-primary btn-sm" onclick="verExpediente('${p.id}')">Ver</button><button class="btn btn-whatsapp btn-sm" onclick="enviarWhatsAppDirecto('${p.id}')">💬</button></div></div>`).join('');
+  const rec=sortByFecha(pacientes).slice(0,5);const dr=document.getElementById('dashboard-recent');if(dr)dr.innerHTML=rec.length===0?'<p style="color:var(--gray-light);text-align:center;padding:18px">No hay pacientes aún.</p>':`<table class="patient-table" style="min-width:auto"><thead><tr><th>Fecha</th><th>Nombre</th><th>Material</th><th>Adeudo</th></tr></thead><tbody>${rec.map(p=>`<tr style="opacity:1;transform:none"><td style="padding:8px 10px"><strong>${formatDate(p.fecha)}</strong></td><td style="padding:8px 10px">${p.nombre}</td><td style="padding:8px 10px;font-size:.77rem;color:var(--primary)">${p.material||'—'}</td><td style="padding:8px 10px;color:${p.adeudo>0?'var(--red)':'var(--green)'}"><strong>${p.adeudo>0?fmt(p.adeudo):'Pagado ✓'}</strong></td></tr>`).join('')}</tbody></table>`;
 }
 
-// ════════════════════════════════════════════════════════
-//  MODALES
-// ════════════════════════════════════════════════════════
+// ════ MODALES ════
 function openModal(id){const el=document.getElementById(id);if(el)el.classList.add('open');}
 function closeModal(id){const el=document.getElementById(id);if(el)el.classList.remove('open');}
 document.querySelectorAll('.modal-overlay').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)m.classList.remove('open');}));
 
-// ════════════════════════════════════════════════════════
-//  INIT
-// ════════════════════════════════════════════════════════
-buildCarousel();
-buildParticles();
-loadConfig();
+// ════ INIT ════
+buildCarousel();buildParticles();loadConfig();
 if(config.logo){const lp=document.getElementById('lp-logo-icon');if(lp)lp.innerHTML=`<img src="${config.logo}" style="width:100%;height:100%;object-fit:cover;border-radius:13px">`;}
 if(config.nombre){const lc=document.getElementById('lp-clinic-name');if(lc)lc.textContent=config.nombre;}
-
-// Verificar sesión activa de Firebase
-auth.onAuthStateChanged(async user=>{
-  if(user && user.emailVerified){
-    try {
-      // Esperar a que Firestore esté listo
-      await new Promise(resolve=>setTimeout(resolve,1200));
-      const snap = await db.collection(USERS_COL).doc(user.uid).get();
-      if(snap.exists){
-        const ud = snap.data();
-        if(ud.status==='active'||ud.status==='trial'){
-          if(ud.status==='trial'&&new Date()>new Date(ud.trialEnd)){
-            await db.collection(USERS_COL).doc(user.uid).update({status:'expired'}).catch(()=>{});
-            showScreen('trial-screen');
-            return;
-          }
-          currentUser=user; currentUserDoc=ud;
-          entrarSistema(ud);
-          return;
-        }
-      } else {
-        // Doc no existe — crear uno básico y entrar
-        const trialEnd = new Date(); trialEnd.setDate(trialEnd.getDate()+7);
-        const newDoc = {uid:user.uid,nombre:user.email.split('@')[0],email:user.email,rol:'Optometrista',status:'trial',trialEnd:trialEnd.toISOString(),emailVerified:true,createdAt:new Date().toISOString(),isAdmin:false};
-        await db.collection(USERS_COL).doc(user.uid).set(newDoc).catch(()=>{});
-        currentUser=user; currentUserDoc=newDoc;
-        entrarSistema(newDoc);
-        return;
-      }
-    } catch(e) {
-      console.error('onAuthStateChanged error:', e);
-    }
-  }
-  showScreen('login-screen');
-});
+showScreen('login-screen');
 
 </script>
 <script>
