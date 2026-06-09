@@ -1,34 +1,40 @@
 // ══════════════════════════════════════
 //  SERVICE WORKER — Bitácora Optométrica
-//  Versión: 1.0
+//  Versión: 4.0
 // ══════════════════════════════════════
-const CACHE_NAME = 'bitacora-v3';
+const CACHE_NAME = 'bitacora-v4';
+
+// Recursos a cachear (solo estáticos)
 const CACHE_URLS = [
   '/bitacora-optometrica/',
   '/bitacora-optometrica/index.html',
-  '/bitacora-optometrica/icon-192.png',
-  '/bitacora-optometrica/icon-512.png',
   '/bitacora-optometrica/manifest.json',
-  // Google Fonts
-  'https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Serif+Display:ital@0;1&display=swap',
-  // Firebase SDK (cache para carga más rápida)
-  'https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js',
-  'https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js',
-  'https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js',
+  '/bitacora-optometrica/icon-72.png',
+  '/bitacora-optometrica/icon-96.png',
+  '/bitacora-optometrica/icon-128.png',
+  '/bitacora-optometrica/icon-144.png',
+  '/bitacora-optometrica/icon-152.png',
+  '/bitacora-optometrica/icon-192.png',
+  '/bitacora-optometrica/icon-384.png',
+  '/bitacora-optometrica/icon-512.png',
 ];
 
-// INSTALL — cachear recursos estáticos
+// INSTALL — limpiar caches viejos y cachear nuevos recursos
 self.addEventListener('install', event => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => {
-      return Promise.allSettled(
-        CACHE_URLS.map(url => cache.add(url).catch(e => console.warn('No se pudo cachear:', url)))
-      );
-    }).then(() => self.skipWaiting())
+    caches.keys().then(keys =>
+      Promise.all(keys.map(k => caches.delete(k)))
+    ).then(() =>
+      caches.open(CACHE_NAME).then(cache =>
+        Promise.allSettled(CACHE_URLS.map(url => 
+          cache.add(url).catch(() => {})
+        ))
+      )
+    ).then(() => self.skipWaiting())
   );
 });
 
-// ACTIVATE — limpiar caches viejos
+// ACTIVATE — tomar control inmediato
 self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys().then(keys =>
@@ -37,32 +43,33 @@ self.addEventListener('activate', event => {
   );
 });
 
-// FETCH — estrategia: Network First para Firebase, Cache First para estáticos
+// FETCH — estrategia según tipo de request
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
 
-  // Firebase y API calls: siempre red (necesita internet para datos)
+  // Firebase, Google APIs y auth — SIEMPRE red, nunca caché
   if (url.hostname.includes('firebase') ||
+      url.hostname.includes('firestore') ||
+      url.hostname.includes('identitytoolkit') ||
       url.hostname.includes('googleapis') ||
       url.hostname.includes('firebaseio') ||
-      url.hostname.includes('identitytoolkit')) {
-    event.respondWith(fetch(event.request).catch(() => new Response('{}', {headers:{'Content-Type':'application/json'}})));
+      url.hostname.includes('gstatic')) {
+    event.respondWith(fetch(event.request));
     return;
   }
 
-  // Recursos estáticos: Cache First, fallback a red
+  // Recursos estáticos — Cache First, fallback a red
   event.respondWith(
     caches.match(event.request).then(cached => {
       if (cached) return cached;
       return fetch(event.request).then(response => {
-        // Solo cachear respuestas válidas
-        if (response && response.status === 200 && response.type !== 'opaque') {
+        if (response && response.status === 200) {
           const clone = response.clone();
           caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
         }
         return response;
       }).catch(() => {
-        // Offline: devolver la app principal
+        // Sin internet — devolver página principal desde caché
         if (event.request.destination === 'document') {
           return caches.match('/bitacora-optometrica/index.html');
         }
@@ -71,7 +78,7 @@ self.addEventListener('fetch', event => {
   );
 });
 
-// Mensaje para forzar actualización
+// Mensaje para forzar actualización desde el cliente
 self.addEventListener('message', event => {
   if (event.data === 'skipWaiting') self.skipWaiting();
 });
