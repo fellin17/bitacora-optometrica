@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Debug Bitácora</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:sans-serif;background:#050f28;color:white;padding:16px;font-size:14px}
+input{width:100%;padding:12px;margin-bottom:10px;border-radius:8px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.1);color:white;font-size:15px}
+button{width:100%;padding:14px;border:none;border-radius:8px;background:#1565C0;color:white;font-size:15px;cursor:pointer;font-weight:bold;margin-bottom:10px}
+.log{background:rgba(0,0,0,.4);border-radius:8px;padding:12px;margin-top:10px;font-size:12px;font-family:monospace;max-height:60vh;overflow-y:auto}
+.ok{color:#4ade80}.err{color:#f87171}.info{color:#60a5fa}.warn{color:#fbbf24}
+</style>
+</head>
+<body>
+<h2 style="margin-bottom:16px;text-align:center">🔍 Debug Login</h2>
+<input type="email" id="email" placeholder="Correo" value="alfredo.martinezramirez@gmail.com">
+<input type="password" id="pass" placeholder="Contraseña">
+<button onclick="runTest()">🚀 Ejecutar prueba completa</button>
+<div class="log" id="log">Listo para probar...<br></div>
+
+<script>
+const KEY = "AIzaSyBtX91M46Mk-x2ncGGD3u5Gekm4hWk6VV4";
+const PROJECT = "bitacora-optometrica";
+const log = document.getElementById('log');
+
+function L(msg, type='info'){
+  const d = document.createElement('div');
+  d.className = type;
+  d.textContent = (type==='ok'?'✅ ':type==='err'?'❌ ':type==='warn'?'⚠️ ':'ℹ️ ') + msg;
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+}
+
+async function runTest(){
+  log.innerHTML = '';
+  const email = document.getElementById('email').value.trim();
+  const pass  = document.getElementById('pass').value;
+
+  L('Iniciando prueba...', 'info');
+  L('Email: ' + email, 'info');
+  L('Navegador: ' + navigator.userAgent.substring(0,60), 'info');
+  L('Online: ' + navigator.onLine, navigator.onLine?'ok':'err');
+
+  // PASO 1: Ping a Google
+  L('--- PASO 1: Conectividad ---', 'info');
+  try {
+    const r = await fetch('https://www.google.com', {mode:'no-cors'});
+    L('Google alcanzable', 'ok');
+  } catch(e) { L('Google NO alcanzable: '+e.message, 'err'); }
+
+  // PASO 2: Firebase Auth REST
+  L('--- PASO 2: Firebase Auth ---', 'info');
+  try {
+    const r = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${KEY}`,
+      {method:'POST', headers:{'Content-Type':'application/json'},
+       body: JSON.stringify({email, password: pass, returnSecureToken: true})}
+    );
+    const data = await r.json();
+    if(data.error){
+      L('Auth error: ' + JSON.stringify(data.error), 'err');
+    } else {
+      L('Auth OK! uid: ' + data.localId, 'ok');
+      L('emailVerified: ' + data.registered, 'ok');
+
+      // PASO 3: Verificar email
+      L('--- PASO 3: Info usuario ---', 'info');
+      try {
+        const r2 = await fetch(
+          `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${KEY}`,
+          {method:'POST', headers:{'Content-Type':'application/json'},
+           body: JSON.stringify({idToken: data.idToken})}
+        );
+        const u = await r2.json();
+        if(u.error){ L('Lookup error: '+JSON.stringify(u.error), 'err'); }
+        else {
+          const user = u.users[0];
+          L('emailVerified: ' + user.emailVerified, user.emailVerified?'ok':'warn');
+          
+          // PASO 4: Firestore
+          L('--- PASO 4: Firestore ---', 'info');
+          try {
+            const r3 = await fetch(
+              `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents/bita_usuarios/${data.localId}`,
+              {headers: {'Authorization': `Bearer ${data.idToken}`}}
+            );
+            const fs = await r3.json();
+            if(fs.error){ L('Firestore error: '+JSON.stringify(fs.error), 'err'); }
+            else if(fs.fields){
+              L('Firestore OK! status: ' + (fs.fields.status?.stringValue||'?'), 'ok');
+              L('nombre: ' + (fs.fields.nombre?.stringValue||'?'), 'ok');
+            } else {
+              L('Firestore: doc no existe', 'warn');
+            }
+          } catch(e){ L('Firestore fetch error: '+e.message, 'err'); }
+        }
+      } catch(e){ L('Lookup fetch error: '+e.message, 'err'); }
+    }
+  } catch(e) {
+    L('Auth fetch error: ' + e.message, 'err');
+    L('Error type: ' + e.constructor.name, 'err');
+  }
+
+  L('--- PRUEBA COMPLETA ---', 'info');
+}
+</script>
+</body>
+</html>
