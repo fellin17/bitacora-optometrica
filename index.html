@@ -405,18 +405,163 @@ const SLIDES=[{"src":"data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAk
 //  bitacora-optometrica
 // ════════════════════════════════════════════════════════
 
+const FB_API_KEY  = "AIzaSyBtX91M46Mk-x2ncGGD3u5Gekm4hWk6VV4";
+const FB_PROJECT  = "bitacora-optometrica";
 const FB_CFG = {
-  apiKey: "AIzaSyBtX91M46Mk-x2ncGGD3u5Gekm4hWk6VV4",
+  apiKey: FB_API_KEY,
   authDomain: "bitacora-optometrica.firebaseapp.com",
-  projectId: "bitacora-optometrica",
+  projectId: FB_PROJECT,
   storageBucket: "bitacora-optometrica.firebasestorage.app",
   messagingSenderId: "1048681778557",
   appId: "1:1048681778557:web:99f7c5408b53bab7975014"
 };
 
-// Fix para móvil Android — forzar persistencia LOCAL
 firebase.initializeApp(FB_CFG);
-firebase.auth().setPersistence(firebase.auth.Auth.Persistence.LOCAL);
+
+// Usar NONE para evitar indexedDB en todos los dispositivos
+firebase.auth().setPersistence(firebase.auth.Auth.Persistence.NONE).catch(()=>{});
+
+// ════ API REST DE FIREBASE — funciona en cualquier celular ════
+async function restLogin(email, pass){
+  const url = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FB_API_KEY}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({email, password: pass, returnSecureToken: true})
+  });
+  const data = await res.json();
+  if(data.error) throw {code: 'auth/'+data.error.message.toLowerCase().replace(/ /g,'_'), message: data.error.message};
+  return data; // {idToken, localId, email, emailVerified, ...}
+}
+
+async function restRegister(email, pass){
+  const url = `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${FB_API_KEY}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({email, password: pass, returnSecureToken: true})
+  });
+  const data = await res.json();
+  if(data.error) throw {code: 'auth/'+data.error.message.toLowerCase().replace(/ /g,'_'), message: data.error.message};
+  return data;
+}
+
+async function restGetUserInfo(idToken){
+  const url = `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${FB_API_KEY}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({idToken})
+  });
+  const data = await res.json();
+  if(data.error) throw data.error;
+  return data.users[0];
+}
+
+async function restSendVerification(idToken){
+  const url = `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${FB_API_KEY}`;
+  await fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({requestType:'VERIFY_EMAIL', idToken})
+  });
+}
+
+// Firestore REST API
+async function fsGet(collection, docId, idToken){
+  const url = `https://firestore.googleapis.com/v1/projects/${FB_PROJECT}/databases/(default)/documents/${collection}/${docId}`;
+  const res = await fetch(url, {
+    headers: idToken ? {'Authorization': `Bearer ${idToken}`} : {}
+  });
+  if(!res.ok) return null;
+  const data = await res.json();
+  return fsParseDoc(data);
+}
+
+async function fsSet(collection, docId, fields, idToken){
+  const url = `https://firestore.googleapis.com/v1/projects/${FB_PROJECT}/databases/(default)/documents/${collection}/${docId}`;
+  const body = {fields: fsEncodeFields(fields)};
+  await fetch(url, {
+    method: 'PATCH',
+    headers: {'Content-Type':'application/json', ...(idToken?{'Authorization':`Bearer ${idToken}`}:{})},
+    body: JSON.stringify(body)
+  });
+}
+
+async function fsQuery(collection, field, value, idToken){
+  const url = `https://firestore.googleapis.com/v1/projects/${FB_PROJECT}/databases/(default)/documents:runQuery`;
+  const body = {structuredQuery:{from:[{collectionId:collection}],where:{fieldFilter:{field:{fieldPath:field},op:'EQUAL',value:{stringValue:value}}}}};
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json',...(idToken?{'Authorization':`Bearer ${idToken}`}:{})},
+    body: JSON.stringify(body)
+  });
+  const data = await res.json();
+  return (data||[]).filter(d=>d.document).map(d=>({id:d.document.name.split('/').pop(),...fsParseDoc(d.document)}));
+}
+
+async function fsAddDoc(collection, fields, idToken){
+  const url = `https://firestore.googleapis.com/v1/projects/${FB_PROJECT}/databases/(default)/documents/${collection}`;
+  const body = {fields: fsEncodeFields(fields)};
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json',...(idToken?{'Authorization':`Bearer ${idToken}`}:{})},
+    body: JSON.stringify(body)
+  });
+  const data = await res.json();
+  return data.name?.split('/').pop();
+}
+
+async function fsUpdateDoc(collection, docId, fields, idToken){
+  const fieldPaths = Object.keys(fields).join(',');
+  const url = `https://firestore.googleapis.com/v1/projects/${FB_PROJECT}/databases/(default)/documents/${collection}/${docId}?updateMask.fieldPaths=${Object.keys(fields).join('&updateMask.fieldPaths=')}`;
+  const body = {fields: fsEncodeFields(fields)};
+  await fetch(url, {
+    method: 'PATCH',
+    headers: {'Content-Type':'application/json',...(idToken?{'Authorization':`Bearer ${idToken}`}:{})},
+    body: JSON.stringify(body)
+  });
+}
+
+async function fsDeleteDoc(collection, docId, idToken){
+  const url = `https://firestore.googleapis.com/v1/projects/${FB_PROJECT}/databases/(default)/documents/${collection}/${docId}`;
+  await fetch(url, {method:'DELETE', headers: idToken?{'Authorization':`Bearer ${idToken}`}:{}});
+}
+
+// Helpers para convertir datos Firestore REST ↔ JS
+function fsParseDoc(doc){
+  if(!doc||!doc.fields) return null;
+  const out = {};
+  for(const [k,v] of Object.entries(doc.fields)){
+    if(v.stringValue !== undefined) out[k] = v.stringValue;
+    else if(v.integerValue !== undefined) out[k] = parseInt(v.integerValue);
+    else if(v.doubleValue !== undefined) out[k] = parseFloat(v.doubleValue);
+    else if(v.booleanValue !== undefined) out[k] = v.booleanValue;
+    else if(v.arrayValue) out[k] = (v.arrayValue.values||[]).map(i=>i.stringValue||i.integerValue||i.booleanValue||'');
+    else if(v.nullValue !== undefined) out[k] = null;
+    else out[k] = JSON.stringify(v);
+  }
+  return out;
+}
+
+function fsEncodeFields(obj){
+  const out = {};
+  for(const [k,v] of Object.entries(obj)){
+    if(v === null || v === undefined) out[k] = {nullValue: null};
+    else if(typeof v === 'boolean') out[k] = {booleanValue: v};
+    else if(typeof v === 'number') out[k] = Number.isInteger(v)?{integerValue:String(v)}:{doubleValue:v};
+    else if(Array.isArray(v)) out[k] = {arrayValue:{values: v.map(i=>({stringValue:String(i)}))}};
+    else out[k] = {stringValue: String(v)};
+  }
+  return out;
+}
+
+// Token storage (en memoria — sin indexedDB)
+let _idToken = null;
+let _uid = null;
+function setToken(token, uid){ _idToken = token; _uid = uid; }
+function getToken(){ return _idToken; }
+function getUid(){ return _uid; }
 
 const auth = firebase.auth();
 const db   = firebase.firestore();
@@ -553,42 +698,159 @@ async function doRegister(){
   if(btn){btn.disabled=true;btn.textContent='Registrando...';}
 
   try {
-    const cred = await auth.createUserWithEmailAndPassword(email, pass);
-    await cred.user.sendEmailVerification();
-    const trialEnd = new Date();
-    trialEnd.setDate(trialEnd.getDate()+7);
-    await db.collection(USERS_COL).doc(cred.user.uid).set({
-      uid: cred.user.uid, nombre, email, rol,
-      status: 'trial',
-      trialEnd: trialEnd.toISOString(),
-      emailVerified: false,
-      createdAt: new Date().toISOString(),
-      isAdmin: false
-    });
+    // Crear cuenta via REST
+    const authData = await restRegister(email, pass);
+    const idToken  = authData.idToken;
+    const uid      = authData.localId;
+
+    // Enviar email de verificación
+    await restSendVerification(idToken);
+
+    // Guardar en Firestore
+    const trialEnd = new Date(Date.now()+7*24*60*60*1000).toISOString();
+    await fsSet(USERS_COL, uid, {
+      uid, nombre, email, rol, status:'trial',
+      trialEnd, emailVerified:false,
+      createdAt: new Date().toISOString(), isAdmin:false
+    }, idToken);
+
+    // Mostrar pantalla de verificación
     const ev = document.getElementById('verify-email-shown');
     if(ev) ev.textContent = email;
     showScreen('verify-screen');
-    await auth.signOut();
-  } catch(e) {
+
+  } catch(e){
     const msgs = {
-      'auth/email-already-in-use': 'Ese correo ya está registrado.',
-      'auth/invalid-email': 'Correo inválido.',
-      'auth/weak-password': 'Contraseña muy débil (mínimo 6 caracteres).'
+      'auth/email_exists':   'Ese correo ya está registrado.',
+      'auth/invalid_email':  'Correo inválido.',
+      'auth/weak_password':  'Contraseña muy débil (mínimo 6 caracteres).',
     };
     showLpMsg('lp-reg-msg','error', msgs[e.code]||e.message);
   }
   if(btn){btn.disabled=false;btn.textContent='Crear cuenta y verificar ✉️';}
 }
 
-// Reenviar verificación
+
 async function reenviarVerificacion(){
   try{
     const email=document.getElementById('li-user')?.value.trim()||document.getElementById('reg-email')?.value.trim();
     const pass=document.getElementById('li-pass')?.value.trim()||document.getElementById('reg-pass')?.value.trim();
     if(email&&pass){
-      const cred=await auth.signInWithEmailAndPassword(email,pass);
-      await cred.user.sendEmailVerification();
-      await auth.signOut();
+      const authData = await restLogin(email, pass);
+      await restSendVerification(authData.idToken);
+    }
+    showToast('📧 Correo de verificación reenviado','success');
+  }catch(e){showToast('Error al reenviar: '+e.message,'error');}
+}
+
+function showTrialExpired(){ showScreen('trial-screen'); }
+
+// ════════════════════════════════════════════════════════
+//  LOGIN — CORREGIDO con mejor manejo de errores
+// ════════════════════════════════════════════════════════
+async function doLogin(){
+  const email = document.getElementById('li-user').value.trim();
+  const pass  = document.getElementById('li-pass').value;
+  if(!email||!pass){showLpMsg('lp-login-msg','error','Completa correo y contraseña.');return;}
+
+  const btn = document.getElementById('btn-login');
+  if(btn){btn.disabled=true;btn.textContent='Entrando...';}
+
+  const loginTimer = setTimeout(()=>{
+    showLpMsg('lp-login-msg','error','Tiempo de espera agotado. Verifica tu internet e intenta de nuevo.');
+    if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
+  }, 12000);
+
+  try {
+    // 1 — Login via REST (funciona en cualquier celular)
+    const authData = await restLogin(email, pass);
+    const idToken = authData.idToken;
+    const uid     = authData.localId;
+
+    // 2 — Verificar email
+    const userInfo = await restGetUserInfo(idToken);
+    if(!userInfo.emailVerified){
+      clearTimeout(loginTimer);
+      showLpMsg('lp-login-msg','error','Verifica tu correo antes de entrar. Revisa también la carpeta SPAM.');
+      if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
+      return;
+    }
+
+    // 3 — Guardar token en memoria
+    setToken(idToken, uid);
+
+    // 4 — Leer datos de Firestore
+    let userData = await fsGet(USERS_COL, uid, idToken).catch(()=>null);
+
+    // 5 — Si no existe, crear
+    if(!userData){
+      userData = {
+        uid, nombre: email.split('@')[0], email,
+        rol: 'Optometrista', status: 'trial',
+        trialEnd: new Date(Date.now()+7*24*60*60*1000).toISOString(),
+        emailVerified: true, createdAt: new Date().toISOString(), isAdmin: false
+      };
+      fsSet(USERS_COL, uid, userData, idToken).catch(()=>{});
+    }
+
+    // 6 — Verificar status
+    if(userData.status==='denied'){
+      clearTimeout(loginTimer);
+      showLpMsg('lp-login-msg','error','Tu acceso fue denegado. Contacta al administrador.');
+      setToken(null,null);
+      if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
+      return;
+    }
+
+    if(userData.status==='trial' && userData.trialEnd){
+      if(new Date() > new Date(userData.trialEnd)){
+        clearTimeout(loginTimer);
+        fsUpdateDoc(USERS_COL, uid, {status:'expired'}, idToken).catch(()=>{});
+        showTrialExpired();
+        setToken(null,null);
+        if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
+        return;
+      }
+    }
+
+    if(userData.status==='expired'){
+      clearTimeout(loginTimer);
+      showLpMsg('lp-login-msg','error','Tu periodo de prueba expiró. Contacta al administrador.');
+      setToken(null,null);
+      if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
+      return;
+    }
+
+    // 7 — ENTRAR
+    clearTimeout(loginTimer);
+    currentUser    = {uid, email};
+    currentUserDoc = userData;
+    fsUpdateDoc(USERS_COL, uid, {emailVerified:true}, idToken).catch(()=>{});
+    entrarSistema(userData);
+
+  } catch(e){
+    clearTimeout(loginTimer);
+    const msgs = {
+      'auth/email_not_found':      'No existe una cuenta con ese correo.',
+      'auth/invalid_password':     'Contraseña incorrecta.',
+      'auth/invalid_email':        'Correo inválido.',
+      'auth/too_many_attempts_try_later': 'Demasiados intentos. Espera unos minutos.',
+      'auth/user_disabled':        'Esta cuenta fue deshabilitada.',
+    };
+    showLpMsg('lp-login-msg','error', msgs[e.code]||('Error: '+(e.message||'Sin conexión. Verifica tu internet.')));
+    playErrorSound();
+    if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
+  }
+}
+
+
+async function reenviarVerificacion(){
+  try{
+    const email=document.getElementById('li-user')?.value.trim()||document.getElementById('reg-email')?.value.trim();
+    const pass=document.getElementById('li-pass')?.value.trim()||document.getElementById('reg-pass')?.value.trim();
+    if(email&&pass){
+      const authData = await restLogin(email, pass);
+      await restSendVerification(authData.idToken);
     }
     showToast('📧 Correo de verificación reenviado','success');
   }catch(e){showToast('Error al reenviar: '+e.message,'error');}
@@ -703,9 +965,8 @@ async function reenviarVerificacion(){
     const email=document.getElementById('li-user')?.value.trim()||document.getElementById('reg-email')?.value.trim();
     const pass=document.getElementById('li-pass')?.value.trim()||document.getElementById('reg-pass')?.value.trim();
     if(email&&pass){
-      const cred=await auth.signInWithEmailAndPassword(email,pass);
-      await cred.user.sendEmailVerification();
-      await auth.signOut();
+      const authData = await restLogin(email, pass);
+      await restSendVerification(authData.idToken);
     }
     showToast('📧 Correo de verificación reenviado','success');
   }catch(e){showToast('Error al reenviar: '+e.message,'error');}
@@ -811,9 +1072,8 @@ async function reenviarVerificacion(){
     const email=document.getElementById('li-user')?.value.trim()||document.getElementById('reg-email')?.value.trim();
     const pass=document.getElementById('li-pass')?.value.trim()||document.getElementById('reg-pass')?.value.trim();
     if(email&&pass){
-      const cred=await auth.signInWithEmailAndPassword(email,pass);
-      await cred.user.sendEmailVerification();
-      await auth.signOut();
+      const authData = await restLogin(email, pass);
+      await restSendVerification(authData.idToken);
     }
     showToast('📧 Correo de verificación reenviado','success');
   }catch(e){showToast('Error al reenviar: '+e.message,'error');}
@@ -965,16 +1225,15 @@ function entrarSistema(userData){
 }
 
 function cerrarSesion(){
-  auth.signOut().then(()=>{
-    currentUser=null;currentUserDoc=null;pacientes=[];config={};
-    showScreen('login-screen');
-    const lu=document.getElementById('li-user');
-    const lp=document.getElementById('li-pass');
-    const lm=document.getElementById('lp-login-msg');
-    if(lu)lu.value='';if(lp)lp.value='';
-    if(lm)lm.className='lp-msg';
-    buildCarousel();buildParticles();
-  });
+  setToken(null,null);
+  currentUser=null;currentUserDoc=null;pacientes=[];config={};
+  showScreen('login-screen');
+  const lu=document.getElementById('li-user');
+  const lp=document.getElementById('li-pass');
+  const lm=document.getElementById('lp-login-msg');
+  if(lu)lu.value='';if(lp)lp.value='';
+  if(lm)lm.className='lp-msg';
+  buildCarousel();buildParticles();
 }
 
 // ════════════════════════════════════════════════════════
@@ -986,28 +1245,31 @@ let pacientes=[], config={}, editandoId=null, pagoTargetId=null,
 async function loadData(){
   if(!currentUser) return;
   try {
-    const snap = await db.collection(PACIENTES_COL)
-      .where('uid','==',currentUser.uid).get();
-    pacientes = snap.docs.map(d=>({id:d.id,...d.data()}));
+    const uid = currentUser.uid || getUid();
+    const token = getToken();
+    const results = await fsQuery(PACIENTES_COL, 'uid', uid, token);
+    pacientes = results || [];
     renderDashboard();
-  } catch(e){ console.error('loadData:',e); }
+  } catch(e){ console.error('loadData:',e); pacientes=[]; renderDashboard(); }
 }
 
 async function savePatient(p){
   if(!currentUser) return;
   try {
-    const data = {...p, uid: currentUser.uid, updatedAt: new Date().toISOString()};
+    const token = getToken();
+    const uid   = currentUser.uid || getUid();
+    const data  = {...p, uid, updatedAt: new Date().toISOString()};
     if(editandoId){
-      await db.collection(PACIENTES_COL).doc(editandoId).update(data);
+      await fsSet(PACIENTES_COL, editandoId, data, token);
     } else {
-      const ref = await db.collection(PACIENTES_COL).add({...data, createdAt: new Date().toISOString()});
-      p.id = ref.id;
+      const newId = await fsAddDoc(PACIENTES_COL, {...data, createdAt: new Date().toISOString()}, token);
+      p.id = newId;
     }
   } catch(e){ console.error('savePatient:',e); showToast('❌ Error al guardar: '+e.message,'error'); }
 }
 
 async function deletePatient(id){
-  try { await db.collection(PACIENTES_COL).doc(id).delete(); } catch(e){ console.error(e); }
+  try { await fsDeleteDoc(PACIENTES_COL, id, getToken()); } catch(e){ console.error(e); }
 }
 
 // ════════════════════════════════════════════════════════
