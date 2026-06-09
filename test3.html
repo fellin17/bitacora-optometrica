@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Test Login Completo</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:sans-serif;background:#050f28;color:white;padding:16px;font-size:14px}
+input{width:100%;padding:12px;margin-bottom:10px;border-radius:8px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.1);color:white;font-size:15px}
+button{width:100%;padding:14px;border:none;border-radius:8px;background:#1565C0;color:white;font-size:15px;cursor:pointer;font-weight:bold;margin-bottom:10px}
+.log{background:rgba(0,0,0,.4);border-radius:8px;padding:12px;margin-top:10px;font-size:12px;font-family:monospace;max-height:70vh;overflow-y:auto}
+.ok{color:#4ade80}.err{color:#f87171}.info{color:#60a5fa}.warn{color:#fbbf24}
+#app{display:none;background:rgba(0,100,0,.2);border-radius:12px;padding:20px;text-align:center;margin-top:10px}
+</style>
+</head>
+<body>
+<h2 style="margin-bottom:16px;text-align:center">🔍 Test Login Completo</h2>
+<input type="email" id="email" placeholder="Correo" value="alfredo.martinezramirez@gmail.com">
+<input type="password" id="pass" placeholder="Contraseña">
+<button id="btn" onclick="doLogin()">Iniciar Sesión</button>
+<div id="app">
+  <div style="font-size:3rem">✅</div>
+  <h2 style="margin:10px 0">¡ENTRÓ AL SISTEMA!</h2>
+  <p id="app-info"></p>
+</div>
+<div class="log" id="log">Esperando...<br></div>
+
+<script>
+const KEY = "AIzaSyBtX91M46Mk-x2ncGGD3u5Gekm4hWk6VV4";
+const PROJECT = "bitacora-optometrica";
+const USERS_COL = "bita_usuarios";
+const log = document.getElementById('log');
+
+function L(msg, type='info'){
+  const d = document.createElement('div');
+  d.className = type;
+  d.textContent = (type==='ok'?'✅ ':type==='err'?'❌ ':type==='warn'?'⚠️ ':'ℹ️ ') + msg;
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+}
+
+function fsParse(doc){
+  if(!doc||!doc.fields) return null;
+  const o={};
+  for(const[k,v] of Object.entries(doc.fields)){
+    if(v.stringValue!==undefined)o[k]=v.stringValue;
+    else if(v.booleanValue!==undefined)o[k]=v.booleanValue;
+    else if(v.arrayValue)o[k]=(v.arrayValue.values||[]).map(i=>i.stringValue||'');
+    else if(v.nullValue!==undefined)o[k]=null;
+    else o[k]='';
+  }
+  return o;
+}
+
+async function doLogin(){
+  log.innerHTML = '';
+  const email = document.getElementById('email').value.trim();
+  const pass  = document.getElementById('pass').value;
+  const btn   = document.getElementById('btn');
+  btn.textContent = 'Entrando...'; btn.disabled = true;
+
+  try {
+    L('Paso 1: Auth...', 'info');
+    const r1 = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${KEY}`,
+      {method:'POST', headers:{'Content-Type':'application/json'},
+       body: JSON.stringify({email, password: pass, returnSecureToken: true})}
+    );
+    const auth = await r1.json();
+    if(auth.error){ L('Auth falló: '+auth.error.message, 'err'); btn.textContent='Iniciar Sesión'; btn.disabled=false; return; }
+    L('Auth OK - uid: '+auth.localId, 'ok');
+
+    L('Paso 2: Verificar email...', 'info');
+    const r2 = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${KEY}`,
+      {method:'POST', headers:{'Content-Type':'application/json'},
+       body: JSON.stringify({idToken: auth.idToken})}
+    );
+    const info = await r2.json();
+    const user = info.users?.[0];
+    if(!user){ L('No se encontró usuario', 'err'); btn.textContent='Iniciar Sesión'; btn.disabled=false; return; }
+    if(!user.emailVerified){ L('Email no verificado', 'warn'); btn.textContent='Iniciar Sesión'; btn.disabled=false; return; }
+    L('Email verificado ✓', 'ok');
+
+    L('Paso 3: Firestore...', 'info');
+    const r3 = await fetch(
+      `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents/${USERS_COL}/${auth.localId}`,
+      {headers: {'Authorization': `Bearer ${auth.idToken}`}}
+    );
+    const fsDoc = await r3.json();
+    if(fsDoc.error){ L('Firestore error: '+JSON.stringify(fsDoc.error), 'err'); btn.textContent='Iniciar Sesión'; btn.disabled=false; return; }
+    const userData = fsParse(fsDoc);
+    if(!userData){ L('Doc no existe en Firestore', 'warn'); }
+    else { L('Firestore OK - status: '+userData.status, 'ok'); }
+
+    L('Paso 4: Verificar status...', 'info');
+    if(userData?.status === 'denied'){ L('Acceso denegado', 'err'); btn.textContent='Iniciar Sesión'; btn.disabled=false; return; }
+    if(userData?.status === 'expired'){ L('Trial expirado', 'warn'); btn.textContent='Iniciar Sesión'; btn.disabled=false; return; }
+    L('Status OK: '+userData?.status, 'ok');
+
+    L('Paso 5: Entrando al sistema...', 'info');
+    document.getElementById('app').style.display = 'block';
+    document.getElementById('app-info').textContent = 
+      'Bienvenido ' + (userData?.nombre||email) + ' | Status: ' + userData?.status;
+    L('¡ENTRÓ EXITOSAMENTE!', 'ok');
+
+  } catch(e) {
+    L('Error inesperado: ' + e.message, 'err');
+    L('Stack: ' + (e.stack||'sin stack').substring(0,100), 'err');
+  }
+
+  btn.textContent = 'Iniciar Sesión'; btn.disabled = false;
+}
+</script>
+</body>
+</html>
