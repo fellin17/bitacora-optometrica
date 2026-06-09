@@ -414,7 +414,10 @@ const FB_CFG = {
   appId: "1:1048681778557:web:99f7c5408b53bab7975014"
 };
 
+// Fix para móvil Android — forzar persistencia LOCAL
 firebase.initializeApp(FB_CFG);
+firebase.auth().setPersistence(firebase.auth.Auth.Persistence.LOCAL);
+
 const auth = firebase.auth();
 const db   = firebase.firestore();
 const USERS_COL    = 'bita_usuarios';
@@ -578,6 +581,123 @@ async function doRegister(){
 }
 
 // Reenviar verificación
+async function reenviarVerificacion(){
+  try{
+    const email=document.getElementById('li-user')?.value.trim()||document.getElementById('reg-email')?.value.trim();
+    const pass=document.getElementById('li-pass')?.value.trim()||document.getElementById('reg-pass')?.value.trim();
+    if(email&&pass){
+      const cred=await auth.signInWithEmailAndPassword(email,pass);
+      await cred.user.sendEmailVerification();
+      await auth.signOut();
+    }
+    showToast('📧 Correo de verificación reenviado','success');
+  }catch(e){showToast('Error al reenviar: '+e.message,'error');}
+}
+
+function showTrialExpired(){ showScreen('trial-screen'); }
+
+// ════════════════════════════════════════════════════════
+//  LOGIN — CORREGIDO con mejor manejo de errores
+// ════════════════════════════════════════════════════════
+async function doLogin(){
+  const email = document.getElementById('li-user').value.trim();
+  const pass  = document.getElementById('li-pass').value;
+  if(!email||!pass){showLpMsg('lp-login-msg','error','Completa correo y contraseña.');return;}
+
+  const btn = document.getElementById('btn-login');
+  if(btn){btn.disabled=true;btn.textContent='Entrando...';}
+
+  // Timeout global de 10 segundos para todo el proceso
+  const loginTimeout = setTimeout(()=>{
+    showLpMsg('lp-login-msg','error','La conexión tardó demasiado. Verifica tu internet e intenta de nuevo.');
+    if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
+  }, 10000);
+
+  try {
+    // Auth con timeout de 8 segundos
+    const authPromise = auth.signInWithEmailAndPassword(email, pass);
+    const authTimeout = new Promise((_,reject) => setTimeout(()=>reject(new Error('auth-timeout')), 8000));
+    const cred = await Promise.race([authPromise, authTimeout]);
+
+    // Email verificado?
+    if(!cred.user.emailVerified){
+      clearTimeout(loginTimeout);
+      showLpMsg('lp-login-msg','error','Verifica tu correo antes de entrar. Revisa también la carpeta SPAM.');
+      await auth.signOut();
+      if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
+      return;
+    }
+
+    // Leer Firestore con timeout de 3 segundos
+    let userData = null;
+    try {
+      const fsPromise = db.collection(USERS_COL).doc(cred.user.uid).get();
+      const fsTimeout = new Promise((_,reject) => setTimeout(()=>reject(new Error('fs-timeout')), 3000));
+      const snap = await Promise.race([fsPromise, fsTimeout]);
+      if(snap && snap.exists) userData = snap.data();
+    } catch(e){ userData = null; }
+
+    // Si no hay doc, crear básico
+    if(!userData){
+      userData = {
+        uid: cred.user.uid,
+        nombre: email.split('@')[0],
+        email: email,
+        rol: 'Optometrista',
+        status: 'trial',
+        trialEnd: new Date(Date.now()+7*24*60*60*1000).toISOString(),
+        emailVerified: true,
+        createdAt: new Date().toISOString()
+      };
+      db.collection(USERS_COL).doc(cred.user.uid).set(userData).catch(()=>{});
+    }
+
+    // Verificar status
+    if(userData.status==='denied'){
+      clearTimeout(loginTimeout);
+      showLpMsg('lp-login-msg','error','Tu acceso fue denegado. Contacta al administrador.');
+      await auth.signOut();
+      if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
+      return;
+    }
+
+    if(userData.status==='trial' && userData.trialEnd){
+      if(new Date() > new Date(userData.trialEnd)){
+        clearTimeout(loginTimeout);
+        db.collection(USERS_COL).doc(cred.user.uid).update({status:'expired'}).catch(()=>{});
+        showTrialExpired();
+        await auth.signOut();
+        if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
+        return;
+      }
+    }
+
+    // ENTRAR
+    clearTimeout(loginTimeout);
+    currentUser = cred.user;
+    currentUserDoc = userData;
+    entrarSistema(userData);
+
+  } catch(e){
+    clearTimeout(loginTimeout);
+    const msgs = {
+      'auth/user-not-found':         'No existe una cuenta con ese correo.',
+      'auth/wrong-password':         'Contraseña incorrecta.',
+      'auth/invalid-email':          'Correo inválido.',
+      'auth/too-many-requests':      'Demasiados intentos. Espera unos minutos.',
+      'auth/invalid-credential':     'Correo o contraseña incorrectos.',
+      'auth/network-request-failed': 'Sin conexión a internet.',
+    };
+    const msg = e.message === 'auth-timeout'
+      ? 'La autenticación tardó demasiado. Verifica tu internet.'
+      : (msgs[e.code] || ('Error: ' + e.message));
+    showLpMsg('lp-login-msg','error', msg);
+    playErrorSound();
+    if(btn){btn.disabled=false;btn.textContent='Iniciar Sesión →';}
+  }
+}
+
+
 async function reenviarVerificacion(){
   try{
     const email=document.getElementById('li-user')?.value.trim()||document.getElementById('reg-email')?.value.trim();
@@ -1333,21 +1453,11 @@ auth.onAuthStateChanged(async user=>{
 });
 
 </script>
-
 <script>
 if('serviceWorker' in navigator){
   navigator.serviceWorker.getRegistrations().then(regs=>{regs.forEach(r=>r.unregister());});
   if('caches' in window){caches.keys().then(keys=>keys.forEach(k=>caches.delete(k)));}
 }
-let deferredPrompt=null;
-window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e;setTimeout(()=>{const b=document.getElementById('pwa-banner');if(b&&!localStorage.getItem('pwa_dismissed'))b.style.display='flex';},3000);});
-function installPWA(){if(!deferredPrompt)return;deferredPrompt.prompt();deferredPrompt.userChoice.then(()=>{deferredPrompt=null;const b=document.getElementById('pwa-banner');if(b)b.style.display='none';});}
-function dismissInstall(){localStorage.setItem('pwa_dismissed','1');const b=document.getElementById('pwa-banner');if(b)b.style.display='none';}
 </script>
-<div id="pwa-banner" style="display:none;position:fixed;bottom:0;left:0;right:0;z-index:9999;background:linear-gradient(135deg,rgba(6,9,18,.97),rgba(13,17,35,.97));backdrop-filter:blur(20px);border-top:1px solid rgba(99,102,241,.3);padding:14px 20px;flex-direction:row;align-items:center;gap:12px;flex-wrap:wrap;">
-  <div style="display:flex;align-items:center;gap:12px;flex:1"><img src="icon-192.png" style="width:44px;height:44px;border-radius:10px" alt="icon"><div><div style="font-family:'DM Sans',sans-serif;font-size:.88rem;font-weight:700;color:white">Instalar Bitácora Optométrica</div><div style="font-family:'DM Sans',sans-serif;font-size:.73rem;color:rgba(255,255,255,.5)">Accede más rápido desde tu pantalla de inicio</div></div></div>
-  <div style="display:flex;gap:8px"><button onclick="installPWA()" style="background:linear-gradient(135deg,#6366f1,#7c3aed);color:white;border:none;border-radius:10px;padding:10px 18px;cursor:pointer;font-size:.82rem;font-weight:700;">📲 Instalar</button><button onclick="dismissInstall()" style="background:rgba(255,255,255,.08);color:rgba(255,255,255,.5);border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:10px 12px;cursor:pointer;font-size:.82rem;">✕</button></div>
-</div>
-
 </body>
 </html>
