@@ -613,7 +613,7 @@ async function syncConNube(mostrarToast=true){
       pacientes=cloud;
       await idbClearUser(currentUser.uid);
       for(const p of cloud) await idbPut({...p,uid:currentUser.uid});
-      if(cambios>0){renderDashboard();if(mostrarToast)showToast(`🔄 ${cambios} cambio${cambios>1?'s':''} sincronizado${cambios>1?'s':''},'success`);}
+      if(cambios>0){renderDashboard();if(mostrarToast)showToast(`🔄 ${cambios} cambio${cambios>1?'s':''} sincronizado${cambios>1?'s':''}`, 'success');}
       actualizarIndicadorSync('ok');
     }
   }catch(e){
