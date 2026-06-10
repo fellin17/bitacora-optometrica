@@ -327,7 +327,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
       <button class="theme-btn" onclick="toggleTheme()" id="theme-btn">🌙 Oscuro</button>
       <button class="sound-toggle" onclick="toggleSound()"><span class="sound-dot" id="sound-dot"></span><span id="sound-label">Sonido</span></button>
       <div class="user-chip"><div class="avatar" id="user-avatar">👤</div><span id="user-name-chip">—</span></div><div id="trial-badge" style="display:none;background:rgba(245,127,23,.25);border:1px solid rgba(245,127,23,.4);color:#FFA726;border-radius:20px;padding:4px 11px;font-size:.72rem;font-weight:700"></div>
-      <span id="sync-indicator" title="Clic para sincronizar ahora" style="display:inline-flex;align-items:center;gap:5px;font-size:.68rem;font-weight:600;color:#1565C0;background:#E3F2FD;padding:3px 10px;border-radius:20px;cursor:pointer">🔄 Conectando...</span>
+      <span id="sync-indicator" style="display:none"></span>
       <button class="btn-cerrar" onclick="cerrarSesion()">🚪 Salir</button>
     </div>
   </div>
@@ -535,17 +535,11 @@ async function fsQuery(col,field,value,token){
 // ════ INDEXEDDB — RESPALDO LOCAL ════
 const IDB_NAME='bitacora_local_v1',IDB_VER=1,IDB_STORE='pacientes';
 let idb=null;
-
 function abrirIDB(){
   return new Promise((res,rej)=>{
     if(idb){res(idb);return;}
     const req=indexedDB.open(IDB_NAME,IDB_VER);
-    req.onupgradeneeded=e=>{
-      const db=e.target.result;
-      if(!db.objectStoreNames.contains(IDB_STORE)){
-        db.createObjectStore(IDB_STORE,{keyPath:'id'});
-      }
-    };
+    req.onupgradeneeded=e=>{const db=e.target.result;if(!db.objectStoreNames.contains(IDB_STORE))db.createObjectStore(IDB_STORE,{keyPath:'id'});};
     req.onsuccess=e=>{idb=e.target.result;res(idb);};
     req.onerror=e=>{console.warn('IDB error:',e);rej(e);};
   });
@@ -594,28 +588,18 @@ async function idbClearUser(uid){
   }catch(e){console.warn('idbClearUser:',e);}
 }
 
-// ════ SINCRONIZACIÓN AUTOMÁTICA CADA 10 MIN ════
-let syncTimer=null;
-let syncEnProceso=false;
-
+// ════ SYNC AUTOMÁTICO CADA 10 MIN ════
+let syncTimer=null,syncEnProceso=false;
 function iniciarSyncAutomatico(){
   detenerSyncAutomatico();
-  // Sincroniza inmediatamente al entrar
   setTimeout(()=>syncConNube(false),3000);
-  // Luego cada 10 minutos
   syncTimer=setInterval(()=>syncConNube(false),10*60*1000);
-  // También sincroniza al recuperar internet
-  window.addEventListener('online',()=>{
-    actualizarIndicadorSync('online');
-    setTimeout(()=>syncConNube(false),1500);
-  });
+  window.addEventListener('online',()=>{actualizarIndicadorSync('online');setTimeout(()=>syncConNube(false),1500);});
   window.addEventListener('offline',()=>actualizarIndicadorSync('offline'));
 }
-
 function detenerSyncAutomatico(){
   if(syncTimer){clearInterval(syncTimer);syncTimer=null;}
 }
-
 async function syncConNube(mostrarToast=true){
   if(!currentUser||!getToken()||syncEnProceso)return;
   syncEnProceso=true;
@@ -623,50 +607,35 @@ async function syncConNube(mostrarToast=true){
   try{
     const cloud=await fsQuery(PACIENTES_COL,'uid',currentUser.uid,getToken());
     if(cloud&&Array.isArray(cloud)){
-      // Detecta cambios reales comparando updatedAt
-      const localMap={};
-      pacientes.forEach(p=>{localMap[p.id]=p;});
       let cambios=0;
-      for(const cp of cloud){
-        const lp=localMap[cp.id];
-        if(!lp||(cp.updatedAt&&(!lp.updatedAt||cp.updatedAt>lp.updatedAt))){
-          cambios++;
-        }
-      }
-      // Actualiza memoria y IndexedDB con datos de la nube
+      const localMap={};pacientes.forEach(p=>{localMap[p.id]=p;});
+      for(const cp of cloud){const lp=localMap[cp.id];if(!lp||(cp.updatedAt&&(!lp.updatedAt||cp.updatedAt>lp.updatedAt)))cambios++;}
       pacientes=cloud;
       await idbClearUser(currentUser.uid);
       for(const p of cloud) await idbPut({...p,uid:currentUser.uid});
-      // Re-renderiza solo si había cambios
-      if(cambios>0){
-        renderDashboard();
-        if(mostrarToast) showToast(`🔄 ${cambios} cambio${cambios>1?'s':''} sincronizado${cambios>1?'s':''}','success');
-      }
+      if(cambios>0){renderDashboard();if(mostrarToast)showToast(`🔄 ${cambios} cambio${cambios>1?'s':''} sincronizado${cambios>1?'s':''},'success`);}
       actualizarIndicadorSync('ok');
     }
   }catch(e){
     console.warn('Sync falló:',e);
     actualizarIndicadorSync('error');
-    if(mostrarToast) showToast('📴 Sin conexión — datos locales activos','warn');
+    if(mostrarToast)showToast('📴 Sin conexión — datos locales activos','warn');
   }
   syncEnProceso=false;
 }
-
 function actualizarIndicadorSync(estado){
-  const el=document.getElementById('sync-indicator');
-  if(!el)return;
+  const el=document.getElementById('sync-indicator');if(!el)return;
   const now=new Date().toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});
   const cfg={
-    ok:      {color:'#2E7D32',bg:'#E8F5E9',icon:'☁️',txt:`Sincronizado ${now}`},
+    ok:      {color:'#2E7D32',bg:'#E8F5E9',icon:'☁️',txt:'Sync '+now},
     syncing: {color:'#1565C0',bg:'#E3F2FD',icon:'🔄',txt:'Sincronizando...'},
     error:   {color:'#C62828',bg:'#FFEBEE',icon:'📴',txt:'Sin conexión'},
     offline: {color:'#C62828',bg:'#FFEBEE',icon:'📴',txt:'Sin internet'},
     online:  {color:'#1565C0',bg:'#E3F2FD',icon:'🌐',txt:'Conectado'},
   };
   const c=cfg[estado]||cfg.ok;
-  el.style.cssText=`display:inline-flex;align-items:center;gap:5px;font-size:.68rem;font-weight:600;color:${c.color};background:${c.bg};padding:3px 10px;border-radius:20px;cursor:pointer;transition:all .3s`;
-  el.innerHTML=`<span style="font-size:.75rem">${c.icon}</span>${c.txt}`;
-  el.title='Clic para sincronizar ahora';
+  el.style.cssText=`display:inline-flex;align-items:center;gap:4px;font-size:.68rem;font-weight:600;color:${c.color};background:${c.bg};padding:3px 9px;border-radius:20px;cursor:pointer;transition:all .3s`;
+  el.innerHTML=`<span>${c.icon}</span>${c.txt}`;
   el.onclick=()=>syncConNube(true);
 }
 
@@ -837,13 +806,12 @@ function entrarSistema(ud){
   const av=document.getElementById('user-avatar');if(av)av.textContent=(ud.nombre||'U').charAt(0).toUpperCase();
   if(ud.status==='trial'){const dias=Math.ceil((new Date(ud.trialEnd)-new Date())/864e5);const chip=document.getElementById('trial-badge');if(chip){chip.style.display='flex';chip.textContent=`⏳ Prueba: ${dias}d`;}}
   applyTheme();loadConfig();loadConfigUI();loadData();renderDashboard();
-  // Inicia sincronización automática cada 10 minutos
   iniciarSyncAutomatico();
   actualizarIndicadorSync('syncing');
 }
 function cerrarSesion(){
   detenerSyncAutomatico();
-  if(currentUser) idbClearUser(currentUser.uid).catch(()=>{});
+  if(currentUser)idbClearUser(currentUser.uid).catch(()=>{});
   setToken(null,null);currentUser=null;currentUserDoc=null;pacientes=[];config={};
   showScreen('login-screen');
   const lu=document.getElementById('li-user');const lp=document.getElementById('li-pass');const lm=document.getElementById('lp-login-msg');
@@ -856,35 +824,32 @@ let pacientes=[],config={},editandoId=null,pagoTargetId=null,ultimoId=null,orden
 
 async function loadData(){
   if(!currentUser)return;
-  // 1. Carga local inmediata para respuesta instantánea
-  try{
-    const local=await idbGetAll(currentUser.uid);
-    if(local.length>0){pacientes=local;renderDashboard();}
-  }catch(e){}
-  // 2. Sincroniza con la nube y actualiza local
+  // Carga local inmediata
+  try{const local=await idbGetAll(currentUser.uid);if(local.length>0){pacientes=local;renderDashboard();}}catch(e){}
+  // Sincroniza con la nube
   try{
     const cloud=await fsQuery(PACIENTES_COL,'uid',currentUser.uid,getToken());
-    if(cloud&&cloud.length>=0){
+    if(cloud&&Array.isArray(cloud)){
       pacientes=cloud;
       await idbClearUser(currentUser.uid);
       for(const p of cloud) await idbPut({...p,uid:currentUser.uid});
       renderDashboard();
+      actualizarIndicadorSync('ok');
     }
   }catch(e){
-    console.warn('Sin conexión — usando datos locales:',e);
-    if(!pacientes.length){
-      try{pacientes=await idbGetAll(currentUser.uid);}catch(e2){}
-    }
+    console.warn('loadData sin red:',e);
+    if(!pacientes.length){try{pacientes=await idbGetAll(currentUser.uid);}catch(e2){}}
     renderDashboard();
-    showToast('📴 Sin internet — mostrando datos locales','warn');
+    showToast('📴 Sin internet — datos locales activos','warn');
+    actualizarIndicadorSync('error');
   }
 }
 async function savePatient(p){
   if(!currentUser)return;
   const data={...p,uid:currentUser.uid,updatedAt:new Date().toISOString()};
-  // Guarda localmente siempre (con o sin internet)
+  // Guarda local siempre
   await idbPut(data);
-  // Intenta guardar en la nube
+  // Guarda en nube
   try{
     if(editandoId){
       await fsSet(PACIENTES_COL,editandoId,data,getToken());
@@ -895,14 +860,14 @@ async function savePatient(p){
     }
     actualizarIndicadorSync('ok');
   }catch(e){
-    console.warn('Guardado solo local — sin internet:',e);
-    showToast('💾 Guardado local (sin internet — sync en 10 min)','warn');
+    console.warn('savePatient sin red:',e);
+    showToast('💾 Guardado local — sync en 10 min','warn');
     actualizarIndicadorSync('error');
   }
 }
 async function deletePatient(id){
   await idbDelete(id);
-  try{await fsDelete(PACIENTES_COL,id,getToken());}catch(e){console.warn('deletePatient cloud:',e);}
+  try{await fsDelete(PACIENTES_COL,id,getToken());}catch(e){console.warn('deletePatient nube:',e);}
 }
 
 // ════ CONFIG ════
