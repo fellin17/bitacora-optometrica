@@ -532,14 +532,18 @@ async function fsQuery(col,field,value,token){
   return (data||[]).filter(d=>d.document).map(d=>({id:d.document.name.split('/').pop(),...fsParse(d.document)}));
 }
 
-// ════ INDEXEDDB — RESPALDO LOCAL ════
-const IDB_NAME='bitacora_local_v1',IDB_VER=1,IDB_STORE='pacientes';
+// ════ INDEXEDDB — RESPALDO LOCAL + COLA OFFLINE ════
+const IDB_NAME='bitacora_local_v1',IDB_VER=2,IDB_STORE='pacientes',IDB_QUEUE='pendientes';
 let idb=null;
 function abrirIDB(){
   return new Promise((res,rej)=>{
     if(idb){res(idb);return;}
     const req=indexedDB.open(IDB_NAME,IDB_VER);
-    req.onupgradeneeded=e=>{const db=e.target.result;if(!db.objectStoreNames.contains(IDB_STORE))db.createObjectStore(IDB_STORE,{keyPath:'id'});};
+    req.onupgradeneeded=e=>{
+      const db=e.target.result;
+      if(!db.objectStoreNames.contains(IDB_STORE))db.createObjectStore(IDB_STORE,{keyPath:'id'});
+      if(!db.objectStoreNames.contains(IDB_QUEUE))db.createObjectStore(IDB_QUEUE,{keyPath:'qid',autoIncrement:true});
+    };
     req.onsuccess=e=>{idb=e.target.result;res(idb);};
     req.onerror=e=>{console.warn('IDB error:',e);rej(e);};
   });
@@ -588,13 +592,88 @@ async function idbClearUser(uid){
   }catch(e){console.warn('idbClearUser:',e);}
 }
 
+// ════ COLA DE PENDIENTES OFFLINE ════
+async function queuePut(op){
+  // op = {tipo:'save'|'delete', id, data, uid, createdAt}
+  try{
+    const db=await abrirIDB();
+    return new Promise((res,rej)=>{
+      const tx=db.transaction(IDB_QUEUE,'readwrite');
+      tx.objectStore(IDB_QUEUE).add(op);
+      tx.oncomplete=()=>res();
+      tx.onerror=()=>rej(tx.error);
+    });
+  }catch(e){console.warn('queuePut:',e);}
+}
+async function queueGetAll(){
+  try{
+    const db=await abrirIDB();
+    return new Promise((res,rej)=>{
+      const tx=db.transaction(IDB_QUEUE,'readonly');
+      const req=tx.objectStore(IDB_QUEUE).getAll();
+      req.onsuccess=()=>res(req.result||[]);
+      req.onerror=()=>rej(req.error);
+    });
+  }catch(e){console.warn('queueGetAll:',e);return[];}
+}
+async function queueDelete(qid){
+  try{
+    const db=await abrirIDB();
+    return new Promise((res,rej)=>{
+      const tx=db.transaction(IDB_QUEUE,'readwrite');
+      tx.objectStore(IDB_QUEUE).delete(qid);
+      tx.oncomplete=()=>res();
+      tx.onerror=()=>rej(tx.error);
+    });
+  }catch(e){console.warn('queueDelete:',e);}
+}
+async function contarPendientes(){
+  const q=await queueGetAll();
+  return(q||[]).filter(x=>!currentUser||x.uid===currentUser.uid).length;
+}
+
+// Sube todos los pendientes de la cola a Firestore
+async function subirPendientes(){
+  if(!currentUser||!getToken())return 0;
+  const pendientes=await queueGetAll();
+  const mios=pendientes.filter(x=>x.uid===currentUser.uid);
+  if(!mios.length)return 0;
+  let subidos=0;
+  for(const op of mios){
+    try{
+      if(op.tipo==='save'){
+        if(op.esNuevo){
+          // Nuevo paciente — verificar si ya existe en nube antes de crear
+          const existe=await fsGet(PACIENTES_COL,op.id,getToken()).catch(()=>null);
+          if(!existe){
+            await fsAdd(PACIENTES_COL,{...op.data,createdAt:op.data.createdAt||op.createdAt},getToken());
+          }
+        }else{
+          await fsSet(PACIENTES_COL,op.id,op.data,getToken());
+        }
+      }else if(op.tipo==='delete'){
+        await fsDelete(PACIENTES_COL,op.id,getToken()).catch(()=>{});
+      }
+      await queueDelete(op.qid);
+      subidos++;
+    }catch(e){
+      console.warn('No se pudo subir pendiente',op.qid,e);
+      break; // Si falla uno, parar — probablemente sin red aún
+    }
+  }
+  return subidos;
+}
+
 // ════ SYNC AUTOMÁTICO CADA 10 MIN ════
 let syncTimer=null,syncEnProceso=false;
 function iniciarSyncAutomatico(){
   detenerSyncAutomatico();
   setTimeout(()=>syncConNube(false),3000);
   syncTimer=setInterval(()=>syncConNube(false),10*60*1000);
-  window.addEventListener('online',()=>{actualizarIndicadorSync('online');setTimeout(()=>syncConNube(false),1500);});
+  window.addEventListener('online',()=>{
+    actualizarIndicadorSync('online');
+    setTimeout(()=>syncConNube(false),1500);
+  });
   window.addEventListener('offline',()=>actualizarIndicadorSync('offline'));
 }
 function detenerSyncAutomatico(){
@@ -605,21 +684,23 @@ async function syncConNube(mostrarToast=true){
   syncEnProceso=true;
   actualizarIndicadorSync('syncing');
   try{
+    // 1. Primero subir pendientes locales
+    const subidos=await subirPendientes();
+    // 2. Descargar estado actual de la nube
     const cloud=await fsQuery(PACIENTES_COL,'uid',currentUser.uid,getToken());
     if(cloud&&Array.isArray(cloud)){
-      let cambios=0;
-      const localMap={};pacientes.forEach(p=>{localMap[p.id]=p;});
-      for(const cp of cloud){const lp=localMap[cp.id];if(!lp||(cp.updatedAt&&(!lp.updatedAt||cp.updatedAt>lp.updatedAt)))cambios++;}
       pacientes=cloud;
       await idbClearUser(currentUser.uid);
       for(const p of cloud) await idbPut({...p,uid:currentUser.uid});
-      if(cambios>0){renderDashboard();if(mostrarToast)showToast(`🔄 ${cambios} cambio${cambios>1?'s':''} sincronizado${cambios>1?'s':''}`, 'success');}
+      renderDashboard();
+      if(subidos>0&&mostrarToast)showToast('☁️ '+subidos+' cambio'+(subidos>1?'s':'')+' subido'+(subidos>1?'s':'')+' a la nube','success');
       actualizarIndicadorSync('ok');
     }
   }catch(e){
     console.warn('Sync falló:',e);
-    actualizarIndicadorSync('error');
-    if(mostrarToast)showToast('📴 Sin conexión — datos locales activos','warn');
+    const n=await contarPendientes();
+    actualizarIndicadorSync(n>0?'pendiente':'error');
+    if(mostrarToast)showToast('📴 Sin conexión — '+n+' cambio'+(n!==1?'s':'')+' pendiente'+(n!==1?'s':''),'warn');
   }
   syncEnProceso=false;
 }
@@ -627,15 +708,16 @@ function actualizarIndicadorSync(estado){
   const el=document.getElementById('sync-indicator');if(!el)return;
   const now=new Date().toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});
   const cfg={
-    ok:      {color:'#2E7D32',bg:'#E8F5E9',icon:'☁️',txt:'Sync '+now},
-    syncing: {color:'#1565C0',bg:'#E3F2FD',icon:'🔄',txt:'Sincronizando...'},
-    error:   {color:'#C62828',bg:'#FFEBEE',icon:'📴',txt:'Sin conexión'},
-    offline: {color:'#C62828',bg:'#FFEBEE',icon:'📴',txt:'Sin internet'},
-    online:  {color:'#1565C0',bg:'#E3F2FD',icon:'🌐',txt:'Conectado'},
+    ok:       {color:'#2E7D32',bg:'#E8F5E9',icon:'☁️',txt:'Sync '+now},
+    syncing:  {color:'#1565C0',bg:'#E3F2FD',icon:'🔄',txt:'Sincronizando...'},
+    pendiente:{color:'#E65100',bg:'#FFF3E0',icon:'⏳',txt:'Pendientes offline'},
+    error:    {color:'#C62828',bg:'#FFEBEE',icon:'📴',txt:'Sin conexión'},
+    offline:  {color:'#C62828',bg:'#FFEBEE',icon:'📴',txt:'Sin internet'},
+    online:   {color:'#1565C0',bg:'#E3F2FD',icon:'🌐',txt:'Conectado'},
   };
   const c=cfg[estado]||cfg.ok;
-  el.style.cssText=`display:inline-flex;align-items:center;gap:4px;font-size:.68rem;font-weight:600;color:${c.color};background:${c.bg};padding:3px 9px;border-radius:20px;cursor:pointer;transition:all .3s`;
-  el.innerHTML=`<span>${c.icon}</span>${c.txt}`;
+  el.style.cssText='display:inline-flex;align-items:center;gap:4px;font-size:.68rem;font-weight:600;color:'+c.color+';background:'+c.bg+';padding:3px 9px;border-radius:20px;cursor:pointer;transition:all .3s';
+  el.innerHTML='<span>'+c.icon+'</span>'+c.txt;
   el.onclick=()=>syncConNube(true);
 }
 
@@ -824,50 +906,73 @@ let pacientes=[],config={},editandoId=null,pagoTargetId=null,ultimoId=null,orden
 
 async function loadData(){
   if(!currentUser)return;
-  // Carga local inmediata
-  try{const local=await idbGetAll(currentUser.uid);if(local.length>0){pacientes=local;renderDashboard();}}catch(e){}
-  // Sincroniza con la nube
+  // 1. Carga local inmediata — respuesta instantánea aunque no haya internet
   try{
+    const local=await idbGetAll(currentUser.uid);
+    if(local.length>0){pacientes=local;renderDashboard();}
+  }catch(e){}
+  // 2. Muestra pendientes si los hay
+  const nPend=await contarPendientes();
+  if(nPend>0)actualizarIndicadorSync('pendiente');
+  // 3. Sincroniza con la nube
+  try{
+    const subidos=await subirPendientes();
     const cloud=await fsQuery(PACIENTES_COL,'uid',currentUser.uid,getToken());
     if(cloud&&Array.isArray(cloud)){
       pacientes=cloud;
       await idbClearUser(currentUser.uid);
       for(const p of cloud) await idbPut({...p,uid:currentUser.uid});
       renderDashboard();
+      if(subidos>0)showToast('☁️ '+subidos+' cambio'+(subidos>1?'s':'')+' offline subido'+(subidos>1?'s':'')+' a la nube','success');
       actualizarIndicadorSync('ok');
     }
   }catch(e){
     console.warn('loadData sin red:',e);
     if(!pacientes.length){try{pacientes=await idbGetAll(currentUser.uid);}catch(e2){}}
     renderDashboard();
-    showToast('📴 Sin internet — datos locales activos','warn');
-    actualizarIndicadorSync('error');
+    const n=await contarPendientes();
+    actualizarIndicadorSync(n>0?'pendiente':'error');
+    showToast('📴 Sin internet — '+n+' cambio'+(n!==1?'s':'')+' pendiente'+(n!==1?'s':''),'warn');
   }
 }
 async function savePatient(p){
   if(!currentUser)return;
+  const esNuevo=!editandoId;
   const data={...p,uid:currentUser.uid,updatedAt:new Date().toISOString()};
-  // Guarda local siempre
+  if(esNuevo&&!data.createdAt)data.createdAt=new Date().toISOString();
+  // 1. Guarda local SIEMPRE (funciona sin internet)
   await idbPut(data);
-  // Guarda en nube
+  // 2. Intenta guardar en nube
   try{
-    if(editandoId){
+    if(!esNuevo){
       await fsSet(PACIENTES_COL,editandoId,data,getToken());
     }else{
-      const id=await fsAdd(PACIENTES_COL,{...data,createdAt:new Date().toISOString()},getToken());
+      const id=await fsAdd(PACIENTES_COL,data,getToken());
       p.id=id;data.id=id;
       await idbPut({...data,id});
     }
     actualizarIndicadorSync('ok');
   }catch(e){
-    console.warn('savePatient sin red:',e);
-    showToast('💾 Guardado local — sync en 10 min','warn');
-    actualizarIndicadorSync('error');
+    // Sin internet — encola para subir después
+    console.warn('Sin red, encolando:',e);
+    await queuePut({tipo:'save',id:data.id,esNuevo,data,uid:currentUser.uid,createdAt:new Date().toISOString()});
+    const n=await contarPendientes();
+    actualizarIndicadorSync('pendiente');
+    showToast('💾 Guardado local · '+n+' pendiente'+(n!==1?'s':'')+' por subir','warn');
   }
 }
 async function deletePatient(id){
+  // Borra local siempre
   await idbDelete(id);
-  try{await fsDelete(PACIENTES_COL,id,getToken());}catch(e){console.warn('deletePatient nube:',e);}
+  // Intenta borrar en nube
+  try{
+    await fsDelete(PACIENTES_COL,id,getToken());
+  }catch(e){
+    // Sin red — encola el borrado
+    console.warn('Sin red, encolando borrado:',e);
+    await queuePut({tipo:'delete',id,uid:currentUser.uid,createdAt:new Date().toISOString()});
+    actualizarIndicadorSync('pendiente');
+  }
 }
 
 // ════ CONFIG ════
